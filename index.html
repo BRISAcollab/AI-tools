@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PICO Screening — Frontend</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';s.defer=true;document.head.appendChild(s);}())"></script>
+  <script src="app.js" defer></script>
+  <style>.hidden{display:none;}</style>
+</head>
+<body>
+  <header class="appbar">
+    <div class="brand">
+      <img class="logo" src="logo.avif" alt="Project Logo" />
+      <h1>Title and Abstract Screening (PICO)</h1>
+    </div>
+    
+  </header>
+
+  <main class="container">
+    <section class="card">
+      <h2>Model</h2>
+      <div class="grid">
+        <label class="field">
+          <span>OpenAI Model</span>
+          <select id="modelSelect" required>
+            <option value="" disabled selected>Select a model...</option>
+            <!-- GPT-5 family -->
+            <option value="gpt-5">gpt-5</option>
+            <option value="gpt-5-pro">gpt-5-pro</option>
+            <option value="gpt-5-mini">gpt-5-mini</option>
+            <option value="gpt-5-nano">gpt-5-nano</option>
+            <!-- GPT-4.1 family -->
+            <option value="gpt-4.1">gpt-4.1</option>
+            <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+            <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+            <!-- 4o family -->
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="gpt-4o-mini">gpt-4o-mini</option>
+            <!-- Legacy -->
+            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>OpenAI API Key</span>
+          <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" />
+        </label>
+
+        
+      </div>
+    </section>
+
+    <section class="card" id="paramsCard">
+      <h2>Parameters</h2>
+      <div id="paramsReasoning" class="grid hidden">
+        <label class="field">
+          <span>Verbosity</span>
+          <select id="verbosity">
+            <option value="low">low</option>
+            <option value="medium" selected>medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Reasoning Effort</span>
+          <select id="reasoningEffort">
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium" selected>medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        
+      </div>
+
+      <div id="paramsChat" class="grid hidden">
+        <label class="field">
+          <span>Temperature (0-2)</span>
+          <input id="temperature" type="number" min="0" max="2" step="0.1" value="1.0" />
+        </label>
+        
+      </div>
+
+      <div id="paramsWarning" class="error-banner hidden"></div>
+    </section>
+
+    <section class="card">
+      <h2>Study Context</h2>
+      <label class="field">
+        <span>Question PICO</span>
+        <textarea id="studySynopsis" rows="3" placeholder="e.g., We are reviewing the effects of minocycline on depressive-like behavior in rodents…"></textarea>
+      </label>
+
+      <div class="grid">
+        <label class="field">
+          <span>Inclusion criteria</span>
+          <textarea id="inclusionCriteria" rows="6" placeholder="- design: randomized or controlled trials&#10;- population: rats or mice (preclinical)&#10;- intervention: direct administration of minocycline"></textarea>
+          <small>One per line. Bullets optional.</small>
+        </label>
+
+        <label class="field">
+          <span>Exclusion criteria</span>
+          <textarea id="exclusionCriteria" rows="6" placeholder="- case reports, reviews, editorials&#10;- species other than rats/mice or no animals&#10;- indirect exposure (e.g., only maternal treatment)"></textarea>
+          <small>One per line. Bullets optional.</small>
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Spreadsheet</h2>
+      <div class="uploader" id="dropzone">
+        <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" />
+        <p class="muted">Drag and drop here or click to select .xlsx/.xls/.csv</p>
+        <p id="fileMeta" class="file-meta"></p>
+      </div>
+
+      <div id="sheetPickerWrap" class="sheet-picker hidden">
+        <label class="field">
+          <span>Sheet</span>
+          <select id="sheetSelect"></select>
+        </label>
+      </div>
+
+      <div id="columnsStatus" class="status muted">Waiting for file…</div>
+
+      <div id="previewWrap" class="table-wrap hidden">
+        <table id="previewTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+        <small>Preview of the first 5 rows.</small>
+      </div>
+    </section>
+
+    <section class="card actions">
+      <button id="btnGenerate" class="primary">Generate JSON payload</button>
+      <button id="btnSend" class="secondary" disabled>Send to backend</button>
+      <button id="btnClear" class="ghost">Clear spreadsheet</button>
+      <span id="saveHint" class="muted">Settings auto-save locally.</span>
+      <div id="errorBanner" class="error-banner hidden"></div>
+    </section>
+
+    <section id="progressCard" class="card hidden">
+      <h2>Processing</h2>
+      <div class="progress">
+        <div id="progressBar" class="progress-bar" style="width:0%"></div>
+      </div>
+      <div id="progressLabel" class="muted">Awaiting…</div>
+      <div class="actions">
+        <button id="btnCancel" class="ghost">Cancel</button>
+        <a id="downloadLink" class="ghost hidden" href="#" download>Download result (CSV)</a>
+        <a id="downloadLinkXlsx" class="ghost hidden" href="#" download>Download result (XLSX)</a>
+        <button id="btnRestart" class="secondary hidden">Restart with same spreadsheet</button>
+      </div>
+      <div class="actions" style="justify-content: space-between; margin-top:12px;">
+        <h3 class="muted" style="margin:0;">Live results (decision + rationale)</h3>
+        <button id="btnToggleLog" class="ghost">Show live log</button>
+      </div>
+      <pre id="liveLog" class="code hidden" style="max-height:220px; overflow:auto;"></pre>
+    </section>
+
+    <section id="payloadCard" class="card hidden">
+      <h2>Generated payload</h2>
+      <pre id="payloadOut" class="code"></pre>
+      <button id="btnCopy" class="ghost">Copy</button>
+    </section>
+  </main>
+
+  <footer class="footer"></footer>
+</body>
+</html>
+
