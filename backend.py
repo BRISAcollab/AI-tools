@@ -52,66 +52,51 @@ BASE_BACKOFF = float(os.getenv("OPENAI_BASE_BACKOFF", "1.0"))
 def build_prompt(synopsis: str, inc: List[str], exc: List[str], title: str, abstract: str) -> str:
     inc_lines = "\n".join(f"- {i}" for i in inc) if inc else "- (none provided)"
     exc_lines = "\n".join(f"- {e}" for e in exc) if exc else "- (none provided)"
-    return f"""
-You are a knowledgeable AI assistant tasked with high-sensitivity screening of a research article for a systematic review. Prioritize recall and avoid missing potentially relevant studies.
-
-Synopsis/PICO:
-{synopsis.strip()}
-
-Inclusion Criteria:
-{inc_lines}
-
-Exclusion Criteria:
-{exc_lines}
-
-Study Title:
-{title or ''}
-
-Study Abstract:
-{abstract or ''}
-
-Instructions:
-1. Extract PICO and study design from the title/abstract (population, intervention/exposure, comparator if any, outcomes, and design such as RCT or observational).
-2. Test each inclusion criterion: if evidence suggests it is met, mark as met; if unspecified, mark as uncertain (not unmet).
-3. Test each exclusion criterion: mark as applied only if clearly indicated.
-4. Perform the above reasoning internally and do not reveal it.
-
-Decision logic (high recall focus):
-- If all inclusion criteria appear met and no exclusion applies, decide "include".
-- If any inclusion is clearly unmet or any exclusion definitely applies, decide "exclude".
-- If key elements are uncertain and no clear exclusion applies, decide "maybe" to avoid wrongful exclusion.
-
-When in doubt, favor inclusion (include or maybe).
-
-Output (JSON only):
-Return a single JSON object with keys "decision" and "rationale".
-- "decision": "include" | "exclude" | "maybe"
-- "rationale": brief main reason (≤ 12 words)
-No other text outside the JSON.
-
-Respond with JSON only: {{
-  "decision": "include|exclude|maybe",
-  "rationale": "<=12 words"
-}}
-
-Now, based on the above criteria and the article's title/abstract, output the JSON decision.
-"""
-
-# First version's prompt
-#    return (
-#        "You are a researcher rigorously screening titles and abstracts of scientific papers.\n"
-#        "Use ONLY the PICO/description and the criteria below to decide include, exclude, or maybe.\n"
-#        "Return STRICT JSON with keys: decision (include|exclude|maybe) and rationale (<=12 words).\n\n"
-#        f"Study description/PICO: {synopsis.strip()}\n\n"
-#        f"Inclusion criteria (all must be met):\n{inc_lines}\n\n"
-#        f"Exclusion criteria (any triggers exclusion):\n{exc_lines}\n\n"
-#        "Rules:\n"
-#        "- If any exclusion criterion is met OR not all inclusion criteria are met => exclude.\n"
-#        "- If all inclusion criteria are met => include.\n"
-#        "- If insufficient information => maybe.\n\n"
-#        f"Now screen this record:\nTitle: {title or ''}\nAbstract: {abstract or ''}\n\n"
-#        'Respond with JSON only: {"decision":"include|exclude|maybe","rationale":"<=12 words"}'
-#    )
+    parts: List[str] = [
+        "You are a knowledgeable AI assistant tasked with high-sensitivity screening of a research article for a systematic review. Follow a step-by-step evaluation focusing on not missing any potentially relevant study.",
+        "",
+        f"Synopsis/PICO: {synopsis.strip()}",
+        "",
+        "Inclusion Criteria:",
+        inc_lines,
+        "",
+        "Exclusion Criteria:",
+        exc_lines,
+        "",
+        f"Study Title: {title or ''}",
+        f"Study Abstract: {abstract or ''}",
+        "",
+        "Instructions:",
+        "1. Identify PICO elements and study design from the title and abstract: determine the studied population, intervention/exposure, comparator (if any), outcomes, and the type of study (e.g. RCT, observational, etc.).",
+        "2. Check each inclusion criterion against the information: for each inclusion criterion, assess whether the abstract suggests the study fulfills it. (Treat unspecified details as uncertain rather than negative.)",
+        "3. Check each exclusion criterion: assess if any exclusion criterion is clearly met by the study.",
+        "4. Perform the above reasoning internally – do not output these steps.",
+        "",
+        "Decision logic (high recall focus):",
+        "- If all inclusion criteria appear to be met and no exclusion criteria apply, Include the study.",
+        "- If any inclusion criterion is not met for sure or any exclusion criterion definitely applies, Exclude the study.",
+        "- If there is any uncertainty (e.g. some PICO elements are unclear from the abstract) and no clear exclusion, mark as Maybe rather than risk wrongful exclusion.",
+        "",
+        "When in doubt, err on the side of inclusion (include or maybe).",
+        "",
+        "Output (JSON only): Return a single JSON object with keys:",
+        "- decision: \"include\" | \"exclude\" | \"maybe\"",
+        "- rationale: brief reason (<=12 words)",
+        "- inclusion_evaluation: array of { \"criterion\": string, \"status\": \"met\"|\"unclear\"|\"unmet\" }",
+        "- exclusion_evaluation: array of { \"criterion\": string, \"status\": \"met\"|\"unclear\"|\"unmet\" }",
+        "No other text should be produced outside the JSON.",
+        "",
+        "Example format:",
+        "{",
+        "  \"decision\": \"maybe\",",
+        "  \"rationale\": \"Population matches, but intervention details unclear from abstract\",",
+        "  \"inclusion_evaluation\": [ { \"criterion\": \"population: adults with T2D\", \"status\": \"met\" } ],",
+        "  \"exclusion_evaluation\": [ { \"criterion\": \"non-human study\", \"status\": \"unmet\" } ]",
+        "}",
+        "",
+        "Now, based on the above criteria and the article's title/abstract, output the JSON decision.",
+    ]
+    return "\n".join(parts)
 
 
 def call_openai_chat(model: str, prompt: str, api_key: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -250,13 +235,55 @@ def call_openai_chat(model: str, prompt: str, api_key: str, params: Optional[Dic
         return {"decision": decision, "rationale": rationale}
     decision = str(parsed.get("decision", "")).strip().lower()
     rationale = str(parsed.get("rationale", "")).strip()
+    # Optional per-criterion evaluations
+    def coerce_eval(arr: Any) -> List[Dict[str, str]]:
+        out: List[Dict[str, str]] = []
+        if isinstance(arr, str):
+            try:
+                arr = json.loads(arr)
+            except Exception:
+                arr = []
+        if isinstance(arr, list):
+            for it in arr:
+                if isinstance(it, dict):
+                    crit = str(it.get("criterion", "")).strip()
+                    status = str(it.get("status", "")).strip().lower()
+                    if status not in {"met", "unclear", "unmet"}:
+                        status = "unclear"
+                    if crit:
+                        out.append({"criterion": crit, "status": status})
+                elif isinstance(it, (list, tuple)) and len(it) >= 2:
+                    crit = str(it[0]).strip()
+                    status = str(it[1]).strip().lower()
+                    if status not in {"met", "unclear", "unmet"}:
+                        status = "unclear"
+                    if crit:
+                        out.append({"criterion": crit, "status": status})
+        return out
+    inc_eval = coerce_eval(
+        parsed.get("inclusion_evaluation")
+        or parsed.get("inclusionEvaluations")
+        or parsed.get("inclusion")
+        or []
+    )
+    exc_eval = coerce_eval(
+        parsed.get("exclusion_evaluation")
+        or parsed.get("exclusionEvaluations")
+        or parsed.get("exclusion")
+        or []
+    )
     if decision not in {"include", "exclude", "maybe"}:
         decision = "maybe"
     if len(rationale.split()) > 12:
         rationale = " ".join(rationale.split()[:12])
     if not rationale:
         rationale = "insufficient information"
-    return {"decision": decision, "rationale": rationale}
+    return {
+        "decision": decision,
+        "rationale": rationale,
+        "inclusion_evaluation": inc_eval,
+        "exclusion_evaluation": exc_eval,
+    }
 
 
 def worker(job_id: str):
@@ -290,8 +317,18 @@ def worker(job_id: str):
             delta = now - last_call_ts
             if delta < RATE_LIMIT_MIN_INTERVAL:
                 time.sleep(RATE_LIMIT_MIN_INTERVAL - delta)
+            # Build prompt (single canonical version)
             prompt = build_prompt(synopsis, inc, exc, title, abstract)
             out = call_openai_chat(model, prompt, api_key, params=params)
+            # Ensure per-criterion arrays exist even if the model omitted them
+            inc_eval = out.get("inclusion_evaluation") or []
+            exc_eval = out.get("exclusion_evaluation") or []
+            if not inc_eval and inc:
+                inc_eval = [{"criterion": c, "status": "unclear"} for c in inc]
+            if not exc_eval and exc:
+                exc_eval = [{"criterion": c, "status": "unclear"} for c in exc]
+            out["inclusion_evaluation"] = inc_eval
+            out["exclusion_evaluation"] = exc_eval
             last_call_ts = time.time()
         except Exception as e:
             out = {"decision": "maybe", "rationale": f"error: {str(e)[:70]}"}
@@ -301,6 +338,8 @@ def worker(job_id: str):
             "abstract": abstract,
             "screening_decision": out["decision"],
             "screening_reason": out["rationale"],
+            "inclusion_evaluation": out.get("inclusion_evaluation", []),
+            "exclusion_evaluation": out.get("exclusion_evaluation", []),
         })
         job["processed"] = idx
         job["results"] = results
@@ -438,7 +477,15 @@ def result(job_id: str, format: str = "csv"):
     rows = job.get("results", [])
     if not rows:
         return JSONResponse({"rows": []})
-    fieldnames = ["id", "title", "abstract", "screening_decision", "screening_reason"]
+    fieldnames = [
+        "id",
+        "title",
+        "abstract",
+        "screening_decision",
+        "screening_reason",
+        "inclusion_evaluation",
+        "exclusion_evaluation",
+    ]
 
     if (format or "").lower() == "xlsx":
         try:
@@ -450,7 +497,14 @@ def result(job_id: str, format: str = "csv"):
         ws.title = "triage"
         ws.append(fieldnames)
         for r in rows:
-            ws.append([r.get(k, "") for k in fieldnames])
+            def _cell(val):
+                if isinstance(val, (list, dict)):
+                    try:
+                        return json.dumps(val, ensure_ascii=False)
+                    except Exception:
+                        return str(val)
+                return val
+            ws.append([_cell(r.get(k, "")) for k in fieldnames])
         bio = io.BytesIO()
         wb.save(bio)
         data = bio.getvalue()
@@ -468,7 +522,16 @@ def result(job_id: str, format: str = "csv"):
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
         for r in rows:
-            writer.writerow({k: r.get(k, "") for k in fieldnames})
+            row_out = {}
+            for k in fieldnames:
+                v = r.get(k, "")
+                if isinstance(v, (list, dict)):
+                    try:
+                        v = json.dumps(v, ensure_ascii=False)
+                    except Exception:
+                        v = str(v)
+                row_out[k] = v
+            writer.writerow(row_out)
         data = output.getvalue().encode("utf-8")
         return Response(
             content=data,

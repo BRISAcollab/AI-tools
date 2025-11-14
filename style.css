@@ -56,6 +56,11 @@ body {
 .field { display: grid; gap: 8px; }
 .field > span { font-weight: 600; }
 .field small { color: var(--muted); }
+.criteria-list { display: grid; gap: 8px; }
+.criteria-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.criteria-list input[type="text"] { width: 100%; }
+.icon-btn { border: 1px solid var(--border); background: #fff; color: var(--muted); width: 36px; height: 36px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; }
+.icon-btn:hover { background: #eef3ff; color: var(--text); }
 /* Tooltip help */
 .help { display:inline-flex; align-items:center; margin-left:6px; position:relative; }
 .help .icon { width:16px; height:16px; border-radius:50%; background: var(--primary-weak); color: var(--text); border:1px solid var(--border); font-size:12px; line-height:16px; text-align:center; cursor:help; }

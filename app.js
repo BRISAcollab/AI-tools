@@ -15,9 +15,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const savedKey = localStorage.getItem("apiKey");
 
   if (savedModel) document.getElementById("modelSelect").value = savedModel;
-  if (savedStudy) document.getElementById("studySynopsis").value = savedStudy;
-  if (savedInc) document.getElementById("inclusionCriteria").value = savedInc;
-  if (savedExc) document.getElementById("exclusionCriteria").value = savedExc;
+  if (savedStudy) {
+    const el = document.getElementById("studySynopsis"); if (el) el.value = savedStudy;
+  }
+  if (savedInc) {
+    const el = document.getElementById("inclusionCriteria"); if (el) el.value = savedInc;
+  }
+  if (savedExc) {
+    const el = document.getElementById("exclusionCriteria"); if (el) el.value = savedExc;
+  }
   if (savedKey) { const el=document.getElementById("apiKey"); if(el) el.value = savedKey; }
 
   // initialize parameter groups visibility
@@ -39,6 +45,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   // Attach tooltips for parameters
   addParamTooltips();
+
+  initCriteriaLists();
 });
 
 const debounce = (fn, ms = 300) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -53,6 +61,7 @@ const savePref = debounce((id, value) => localStorage.setItem(id, value), 200);
   "temperature",
 ].forEach((id) => {
   const el = document.getElementById(id);
+  if (!el) return;
   const evt = el.tagName === "SELECT" ? "change" : "input";
   el.addEventListener(evt, () => savePref(id, el.value));
 });
@@ -140,6 +149,68 @@ function loadSheet(name) {
   const ws = state.workbook.Sheets[name];
   const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
   state.rows = json; validateAndPreview();
+}
+
+// ===== Criteria dynamic lists =====
+function initCriteriaLists(){
+  const incContainer = document.getElementById('inclusionList');
+  const excContainer = document.getElementById('exclusionList');
+  const addInc = document.getElementById('addInc');
+  const addExc = document.getElementById('addExc');
+  if (!incContainer || !excContainer) return;
+  // seed from saved newline-separated values for compatibility
+  const savedInc = localStorage.getItem('inclusionCriteria') || '';
+  const savedExc = localStorage.getItem('exclusionCriteria') || '';
+  const incArr = savedInc.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const excArr = savedExc.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if (!incArr.length) incArr.push('');
+  if (!excArr.length) excArr.push('');
+  incArr.forEach(v=>addCriteriaInput(incContainer, v, 'inc'));
+  excArr.forEach(v=>addCriteriaInput(excContainer, v, 'exc'));
+  if (addInc) addInc.onclick = () => addCriteriaInput(incContainer, '', 'inc');
+  if (addExc) addExc.onclick = () => addCriteriaInput(excContainer, '', 'exc');
+}
+function addCriteriaInput(container, value, kind){
+  const row = document.createElement('div');
+  row.className = 'criteria-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = kind === 'inc' ? 'e.g., population: rats or mice (preclinical)' : 'e.g., case reports, reviews, editorials';
+  input.value = value || '';
+  input.addEventListener('input', persistCriteria);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      // add a new row of the same kind
+      addCriteriaInput(container, '', kind);
+    }
+  });
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'icon-btn remove-criterion';
+  remove.title = 'Remove this criterion';
+  remove.setAttribute('aria-label', 'Remove');
+  remove.textContent = 'x';
+  remove.addEventListener('click', () => {
+    const total = container.querySelectorAll('input').length;
+    if (total > 1) {
+      container.removeChild(row);
+    } else {
+      input.value = '';
+    }
+    persistCriteria();
+  });
+  row.appendChild(input);
+  row.appendChild(remove);
+  container.appendChild(row);
+  // focus the new input for quick expansion UX
+  setTimeout(() => input.focus(), 0);
+}
+function persistCriteria(){
+  const incVals = Array.from(document.querySelectorAll('#inclusionList input')).map(el=>el.value.trim()).filter(Boolean);
+  const excVals = Array.from(document.querySelectorAll('#exclusionList input')).map(el=>el.value.trim()).filter(Boolean);
+  localStorage.setItem('inclusionCriteria', incVals.join('\n'));
+  localStorage.setItem('exclusionCriteria', excVals.join('\n'));
 }
 
 // ===== Model parameter helpers =====
@@ -251,10 +322,15 @@ function inferColumns(rows){ if(!rows.length) return []; const rawCols=Object.ke
 
 // ===== Payload =====
 function buildPayload(){
-  const model = document.getElementById("modelSelect").value || "";
-  const synopsis = document.getElementById("studySynopsis").value || "";
-  const incl = document.getElementById("inclusionCriteria").value || "";
-  const excl = document.getElementById("exclusionCriteria").value || "";
+  const model = (document.getElementById("modelSelect")?.value || "");
+  const synopsis = (document.getElementById("studySynopsis")?.value || "");
+  const incl = (document.getElementById("inclusionCriteria")?.value || "");
+  const excl = (document.getElementById("exclusionCriteria")?.value || "");
+  // Gather criteria from dynamic lists if present
+  const incListEls = document.querySelectorAll('#inclusionList input');
+  const excListEls = document.querySelectorAll('#exclusionList input');
+  const inclusionArr = incListEls.length ? Array.from(incListEls).map(el=>el.value.trim()).filter(Boolean) : splitLines(incl);
+  const exclusionArr = excListEls.length ? Array.from(excListEls).map(el=>el.value.trim()).filter(Boolean) : splitLines(excl);
   const api_key = (document.getElementById("apiKey").value || "").trim();
   if (!model) throw new Error("Select a model.");
   if (!state.rows.length) throw new Error("Load a spreadsheet.");
@@ -277,8 +353,8 @@ function buildPayload(){
     model,
     api_key,
     study_synopsis: synopsis,
-    inclusion_criteria: splitLines(incl),
-    exclusion_criteria: splitLines(excl),
+    inclusion_criteria: inclusionArr,
+    exclusion_criteria: exclusionArr,
     params,
     sheet: state.selectedSheet || state.filename || "",
     filename: state.filename || "",

@@ -96,14 +96,16 @@
       <div class="grid">
         <label class="field">
           <span>Inclusion criteria</span>
-          <textarea id="inclusionCriteria" rows="6" placeholder="- design: randomized or controlled trials&#10;- population: rats or mice (preclinical)&#10;- intervention: direct administration of minocycline"></textarea>
-          <small>One per line. Bullets optional.</small>
+          <div id="inclusionList" class="criteria-list"></div>
+          <div class="actions"><button id="addInc" type="button" class="ghost">Add inclusion criterion</button></div>
+          <small>Each field is one criterion.</small>
         </label>
 
         <label class="field">
           <span>Exclusion criteria</span>
-          <textarea id="exclusionCriteria" rows="6" placeholder="- case reports, reviews, editorials&#10;- species other than rats/mice or no animals&#10;- indirect exposure (e.g., only maternal treatment)"></textarea>
-          <small>One per line. Bullets optional.</small>
+          <div id="exclusionList" class="criteria-list"></div>
+          <div class="actions"><button id="addExc" type="button" class="ghost">Add exclusion criterion</button></div>
+          <small>Each field is one criterion.</small>
         </label>
       </div>
     </section>
