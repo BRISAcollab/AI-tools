@@ -53,7 +53,7 @@ def build_prompt(synopsis: str, inc: List[str], exc: List[str], title: str, abst
     inc_lines = "\n".join(f"- {i}" for i in inc) if inc else "- (none provided)"
     exc_lines = "\n".join(f"- {e}" for e in exc) if exc else "- (none provided)"
     parts: List[str] = [
-        "You are a knowledgeable AI assistant tasked with high-sensitivity screening of a research article for a systematic review. Follow a step-by-step evaluation focusing on not missing any potentially relevant study.",
+                "You are a knowledgeable AI assistant tasked with high-sensitivity title and abstract screening of a research article for a systematic review. Follow a step-by-step evaluation focusing on not missing any potentially relevant study.",
         "",
         f"Synopsis/PICO: {synopsis.strip()}",
         "",
@@ -67,14 +67,14 @@ def build_prompt(synopsis: str, inc: List[str], exc: List[str], title: str, abst
         f"Study Abstract: {abstract or ''}",
         "",
         "Instructions:",
-        "1. Identify PICO elements and study design from the title and abstract: determine the studied population, intervention/exposure, comparator (if any), outcomes, and the type of study (e.g. RCT, observational, etc.).",
+        "1. Identify PICO elements and type record from the title and abstract: determine the studied population (animals/population), intervention/exposure end type of record (review, systematic review, original research article, case report).",
         "2. Check each inclusion criterion against the information: for each inclusion criterion, assess whether the abstract suggests the study fulfills it. (Treat unspecified details as uncertain rather than negative.)",
         "3. Check each exclusion criterion: assess if any exclusion criterion is clearly met by the study.",
         "4. Perform the above reasoning internally – do not output these steps.",
         "",
         "Decision logic (high recall focus):",
-        "- If all inclusion criteria appear to be met and no exclusion criteria apply, Include the study.",
-        "- If any inclusion criterion is not met for sure or any exclusion criterion definitely applies, Exclude the study.",
+        "- If all inclusion criteria are met met and no exclusion criteria apply, Include the study.",
+        "- If any inclusion criterion is clearly unmet or any exclusion criterion is definitely met, decide Exclude",
         "- If there is any uncertainty (e.g. some PICO elements are unclear from the abstract) and no clear exclusion, mark as Maybe rather than risk wrongful exclusion.",
         "",
         "When in doubt, err on the side of inclusion (include or maybe).",
