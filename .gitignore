@@ -4,3 +4,7 @@ __pycache__/
 *.bak
 *.txt
 
+# Pastas de dados do teste diagnostico
+input/
+output/
+
