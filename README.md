@@ -13,15 +13,21 @@ AI-tools/
 ├── app.js                      ← Lógica do frontend (JS)
 ├── style.css                   ← Estilos do frontend
 ├── logo.avif                   ← Logo da aplicação
-├── diagnostic/                 ← Scripts de análise diagnóstica
+├── diagnostic/                 ← Scripts de análise diagnóstica (por projeto)
 │   ├── 01_pareamento.py        ← Etapa 1: pareamento IA vs Humano
 │   ├── 02_analise_diagnostica.py ← Etapa 2: métricas + Word
-│   └── 03_fulltext_check.py    ← Etapa 3: fulltext capture check
+│   ├── 03_fulltext_check.py    ← Etapa 3: fulltext capture check
+│   ├── 04_test_reteste.py      ← Etapa 4: teste-reteste (reprodutibilidade)
+│   └── 05_falsos_positivos.py  ← Etapa 5: análise de falsos positivos
+├── report/                     ← Relatório unificado (multiprojeto)
+│   └── relatorio_unificado.py  ← Gera relatório Word consolidado
 ├── input/                      ← Arquivos de entrada (não versionados)
-│   ├── <arquivo_da_IA>.xlsx
-│   ├── <arquivo_humano_TIAB>.xlsx
-│   └── <arquivo_fulltext>.xlsx
+│   ├── YYYYMMDD - modelo - Xº teste - projeto.xlsx  ← Resultados da IA
+│   ├── Projeto - TIAB.xlsx     ← Decisão humana (TIAB)
+│   ├── Projeto - Fulltext.xlsx ← Decisão humana (Fulltext)
+│   └── metadados.xlsx          ← Metadados de execução
 ├── output/                     ← Resultados gerados (não versionados)
+│   ├── relatorio_unificado_*.docx  ← Relatório unificado
 │   ├── pareamento.xlsx
 │   ├── sem_pareamento.xlsx
 │   ├── diagnostic_results_*.docx
@@ -296,4 +302,124 @@ python diagnostic/03_fulltext_check.py --ai input/arquivo_ia.xlsx --fulltext inp
 5. (Opcional) Colocar arquivo fulltext em input/
    python diagnostic/03_fulltext_check.py
    → output/fulltext_check_*.docx  (taxa de captura)
+```
+
+---
+
+# Parte 3 — Relatório Unificado Multiprojeto (`report/relatorio_unificado.py`)
+
+## O que faz
+
+Gera um **único documento Word** consolidando todas as análises de **todos os projetos e modelos** encontrados na pasta `input/`. Ideal para cenários com múltiplos projetos, múltiplos modelos e teste-reteste.
+
+O script detecta automaticamente todos os arquivos pela nomenclatura e realiza **9 tipos de análise** em um único relatório.
+
+## Nomenclatura esperada dos arquivos
+
+### Resultados da IA
+
+```
+YYYYMMDD - modelo - Xº teste - projeto.xlsx
+```
+
+| Campo | Exemplo | Descrição |
+|-------|---------|-----------|
+| `YYYYMMDD` | `20260227` | Código/data da planilha |
+| `modelo` | `gpt-5-mini` | Modelo utilizado |
+| `Xº teste` | `2º teste` | Número do teste (teste-reteste) |
+| `projeto` | `zebra` | Nome do projeto |
+
+Colunas obrigatórias: `title`, `screening_decision`
+
+### Decisão humana
+
+| Arquivo | Exemplo | Descrição |
+|---------|---------|-----------|
+| TIAB | `zebra - TIAB.xlsx` | Decisão humana na fase de título/abstract |
+| Fulltext | `zebra - Fulltext.xlsx` | Artigos incluídos após leitura completa |
+
+Colunas obrigatórias: `title`, `decision`
+
+### Metadados
+
+Arquivo `metadados.xlsx` com colunas: `Projeto`, `código`, `modelo`, `Parâmetros`, `versão`, `tempo`, `tokens input`, `tokens output`, `custo input`, `custo output`, `total`.
+
+## Análises realizadas
+
+O relatório Word contém as seguintes seções:
+
+### 1. Validação dos Dados
+- Inventário de todos os arquivos detectados
+- Verificação de correspondência entre arquivos IA ↔ metadados
+- Alertas para dados faltantes (ex.: projeto sem referência humana)
+
+### 2. Metadados e Custos
+- Tabela completa de metadados de execução (modelo, parâmetros, tempo, tokens, custo)
+- Resumo de custos por projeto (total, médio)
+- Custo médio por modelo (cross-project)
+
+### 3. Análise Diagnóstica (IA vs Humano)
+Para cada **projeto × modelo × teste**:
+- Tabela comparativa entre modelos (sensibilidade, especificidade, VPP, VPN, acurácia, F1, Kappa)
+- Matrizes de confusão 2×2 detalhadas (TP, FP, FN, TN)
+- Destaque visual: sensibilidade ≥ 95% (verde), < 80% (vermelho)
+
+### 4. Verificação de Fulltext (Capture Rate)
+Para cada **projeto × modelo × teste**:
+- Taxa de captura: artigos do fulltext que a IA teria mantido
+- Taxa de perda: artigos que a IA teria descartado
+- Lista dos artigos perdidos por modelo
+
+### 5. Teste-Reteste (Reprodutibilidade)
+Para cada **projeto × modelo**:
+- Concordância exata (3 categorias) e binarizada
+- Kappa de teste-reteste com IC 95%
+- Matrizes de confusão 1º teste × 2º teste
+
+### 6. Falsos Negativos
+- Contagem de artigos incluídos pelo humano mas excluídos pela IA
+- Análise por modelo e teste
+
+### 7. Falsos Positivos
+- Contagem de artigos excluídos pelo humano mas incluídos pela IA
+- Taxa de FP sobre os artigos excluídos pelo humano
+
+### 8. Tabela Comparativa Geral
+- Visão consolidada: projeto × modelo × teste com todas as métricas em uma única tabela
+- Inclui sensibilidade, especificidade, F1, Kappa diagnóstico, captura fulltext, Kappa teste-reteste, custo
+
+### 9. Custo-Efetividade
+- Relação custo (USD) vs. sensibilidade média por modelo
+- Custo por ponto de sensibilidade (menor = melhor relação custo-benefício)
+
+### Notas Metodológicas
+- Descrição da binarização, gold standard, interpretação do Kappa, etc.
+
+## Como rodar
+
+```bash
+# Modo automático (detecta tudo em input/)
+python report/relatorio_unificado.py
+
+# Especificar pasta de entrada
+python report/relatorio_unificado.py --input_dir input/
+```
+
+### Saída
+
+O relatório é salvo em `output/relatorio_unificado_YYYYMMDD_HHMMSS.docx`.
+
+## Fluxo Completo (Multiprojeto)
+
+```
+1. Rodar a triagem por IA na aplicação web para cada projeto/modelo
+   → Exportar resultados com nomenclatura: YYYYMMDD - modelo - Xº teste - projeto.xlsx
+
+2. Colocar em input/:
+   - Todos os arquivos de resultado da IA
+   - Arquivos humanos: Projeto - TIAB.xlsx e Projeto - Fulltext.xlsx
+   - metadados.xlsx
+
+3. python report/relatorio_unificado.py
+   → output/relatorio_unificado_*.docx  (relatório completo)
 ```

@@ -455,7 +455,10 @@ function showProgress(jobId){
         const data = await resp.json();
         const items = data.items || [];
         if (items.length && liveLog){
-          const lines = items.map(it => JSON.stringify({ id: it.id, decision: it.decision, rationale: it.rationale }));
+          const lines = items.map(it => {
+            const base = JSON.stringify({ id: it.id, decision: it.decision, rationale: it.rationale });
+            return it.retries ? `⚠ [retries:${it.retries}] ${base}` : base;
+          });
           liveLog.textContent = (liveLog.textContent ? liveLog.textContent + "\n" : "") + lines.join("\n");
           if (liveLog.textContent.length > 100000) liveLog.textContent = liveLog.textContent.slice(-80000);
           liveLog.scrollTop = liveLog.scrollHeight;
@@ -475,7 +478,15 @@ function showProgress(jobId){
     try {
       const data = JSON.parse(ev.data);
       const processed = data.processed || 0; const total = data.total || 0; const pct = total ? Math.floor((processed/total)*100) : 0;
-      bar.style.width = `${pct}%`; label.textContent = `Processed ${processed} of ${total} (${pct}%)`;
+      bar.style.width = `${pct}%`;
+      // Build label with live concurrency info
+      let concLabel = "";
+      if (data.concurrency) {
+        const c = data.concurrency;
+        const rlWarn = c.rate_limit_hits > 0 ? ` ⚠ ${c.rate_limit_hits} rate-limit(s)` : "";
+        concLabel = ` | ⚡ ${c.current_concurrency} parallel${rlWarn}`;
+      }
+      label.textContent = `Processed ${processed} of ${total} (${pct}%)${concLabel}`;
       // SSE still updates the progress; detailed rows come via polling
       if (data.status === "done") { es.close(); label.textContent = `Completed: ${processed} of ${total} (100%)`; link.href = `/api/result/${jobId}`; link.classList.remove("hidden"); if(linkX){ linkX.href = `/api/result/${jobId}?format=xlsx`; linkX.classList.remove("hidden"); } if(btnCancel) btnCancel.disabled = true; if(btnRestart) btnRestart.classList.remove("hidden"); }
       if (data.status === "cancelled") { es.close(); label.textContent = `Cancelled at ${processed} of ${total}`; link.classList.add("hidden"); if(linkX) linkX.classList.add("hidden"); if(btnCancel) btnCancel.disabled = true; if(btnRestart) btnRestart.classList.remove("hidden"); }

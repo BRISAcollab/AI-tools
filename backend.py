@@ -5,6 +5,7 @@ import threading
 import time
 import io
 import random
+import concurrent.futures
 from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -43,10 +44,94 @@ class StartPayload(BaseModel):
 
 JOBS: Dict[str, Dict[str, Any]] = {}
 
-# Rate limiting knobs (seconds)
-RATE_LIMIT_MIN_INTERVAL = float(os.getenv("RATE_LIMIT_MIN_INTERVAL", "0.6"))  # min spacing between calls
+# Rate limiting / concurrency / resilience knobs
+# Defaults tuned for OpenAI Tier 3 (gpt-4o: 5 000 RPM; reasoning/gpt-5: 600 RPM).
+# Override any value via environment variable without restarting the server.
 MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "5"))
 BASE_BACKOFF = float(os.getenv("OPENAI_BASE_BACKOFF", "1.0"))
+CONCURRENT_WORKERS = int(os.getenv("CONCURRENT_WORKERS", "40"))  # Tier 3 starting concurrency
+CONCURRENT_MAX     = int(os.getenv("CONCURRENT_MAX",     "60"))  # Tier 3 ceiling (AIMD grows up to here)
+CONCURRENT_MIN     = int(os.getenv("CONCURRENT_MIN",     "2"))   # never drop below 2 even on 429s
+RECORD_MAX_RETRIES = int(os.getenv("RECORD_MAX_RETRIES", "3"))   # per-record retry attempts on error
+AIUP_AFTER         = int(os.getenv("AIUP_AFTER",         "5"))   # successes before +1 slot (faster ramp for Tier 3)
+
+
+class RateLimitError(RuntimeError):
+    """Raised by call_openai_chat when the API returns HTTP 429."""
+    def __init__(self, message: str, retry_after: float = 0.0):
+        super().__init__(message)
+        self.retry_after = retry_after  # seconds suggested by the API header
+
+
+class AdaptiveSemaphore:
+    """
+    AIMD concurrency controller:
+    - Additive Increase: after AIUP_AFTER consecutive successes, add 1 slot (up to max).
+    - Multiplicative Decrease: on rate-limit, halve current slots (down to min).
+    Threads block in acquire() when all slots are occupied.
+    """
+    def __init__(self, initial: int, min_workers: int = 1, max_workers: int = 15,
+                 increase_after: int = 8):
+        self._cond   = threading.Condition(threading.Lock())
+        self.current = max(min_workers, min(initial, max_workers))
+        self.min_w   = min_workers
+        self.max_w   = max_workers
+        self._active = 0
+        self._streak = 0           # consecutive successes
+        self._up_after = increase_after
+        self.rate_limit_hits = 0   # lifetime 429 events
+        self.total_successes = 0
+
+    # ---- slot management ----
+
+    def acquire(self):
+        with self._cond:
+            while self._active >= self.current:
+                self._cond.wait(timeout=0.5)
+            self._active += 1
+
+    def release(self):
+        with self._cond:
+            self._active = max(0, self._active - 1)
+            self._cond.notify_all()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+    # ---- feedback signals ----
+
+    def on_success(self):
+        with self._cond:
+            self.total_successes += 1
+            self._streak += 1
+            if self._streak >= self._up_after and self.current < self.max_w:
+                self.current += 1
+                self._streak  = 0
+                self._cond.notify_all()
+
+    def on_rate_limit(self):
+        """Halve current slots (multiplicative decrease)."""
+        with self._cond:
+            self.rate_limit_hits += 1
+            self._streak  = 0
+            self.current  = max(self.min_w, self.current // 2)
+            self._cond.notify_all()
+
+    # ---- introspection ----
+
+    @property
+    def stats(self) -> Dict[str, Any]:
+        with self._cond:
+            return {
+                "current_concurrency": self.current,
+                "active_calls": self._active,
+                "rate_limit_hits": self.rate_limit_hits,
+                "total_successes": self.total_successes,
+            }
 
 
 def build_prompt(synopsis: str, inc: List[str], exc: List[str], title: str, abstract: str) -> str:
@@ -123,23 +208,27 @@ def call_openai_chat(model: str, prompt: str, api_key: str, params: Optional[Dic
         if params and "temperature" in params:
             base_body["temperature"] = float(params["temperature"])
 
-    # Perform request with retries and exponential backoff (handles 429/5xx)
+    # Perform request with retries and exponential backoff (handles 5xx)
     r = None
     for attempt in range(1, MAX_RETRIES + 1):
         r = requests.post(url, headers=headers, json=base_body, timeout=60)
         if r.status_code == 200:
             break
-        # Respect Retry-After when present
-        if r.status_code in (429, 500, 502, 503, 504):
-            ra = r.headers.get("Retry-After")
-            if ra:
-                try:
-                    sleep_s = float(ra)
-                except Exception:
-                    sleep_s = BASE_BACKOFF * (2 ** (attempt - 1))
-            else:
-                jitter = random.uniform(0, 0.25)
-                sleep_s = BASE_BACKOFF * (2 ** (attempt - 1)) + jitter
+        if r.status_code == 429:
+            # Raise immediately so the AdaptiveSemaphore can react and reduce concurrency.
+            ra_header = r.headers.get("Retry-After", "")
+            try:
+                retry_after = float(ra_header)
+            except (TypeError, ValueError):
+                retry_after = 0.0
+            raise RateLimitError(
+                f"HTTP 429 rate-limited (Retry-After={retry_after:.1f}s)",
+                retry_after=retry_after,
+            )
+        # Transient server errors: retry with backoff
+        if r.status_code in (500, 502, 503, 504):
+            jitter = random.uniform(0, 0.25)
+            sleep_s = BASE_BACKOFF * (2 ** (attempt - 1)) + jitter
             time.sleep(min(sleep_s, 20.0))
             continue
         # Other errors: do not retry further
@@ -225,14 +314,9 @@ def call_openai_chat(model: str, prompt: str, api_key: str, params: Optional[Dic
     try:
         parsed = json.loads(content)
     except Exception:
-        lower = content.lower()
-        decision = "maybe"
-        if "include" in lower and "exclude" not in lower:
-            decision = "include"
-        elif "exclude" in lower and "include" not in lower:
-            decision = "exclude"
-        rationale = content.split("\n")[0][:80]
-        return {"decision": decision, "rationale": rationale}
+        # Raise so that the per-record retry loop can attempt again.
+        # Include a snippet of the raw content for diagnostics.
+        raise RuntimeError(f"JSON parse error – raw content snippet: {content[:120]!r}")
     decision = str(parsed.get("decision", "")).strip().lower()
     rationale = str(parsed.get("rationale", "")).strip()
     # Optional per-criterion evaluations
@@ -297,56 +381,150 @@ def worker(job_id: str):
     total = len(records)
     job["total"] = total
     job["processed"] = 0
-    results = []
+    results: List[Dict[str, Any]] = []
     model = job["model"]
     synopsis = job["study_synopsis"]
     inc = job["inclusion_criteria"]
     exc = job["exclusion_criteria"]
     params = job.get("params")
 
-    last_call_ts = 0.0
-    for idx, rec in enumerate(records, start=1):
+    # Per-record retry budget (can be overridden via params)
+    record_max_retries = RECORD_MAX_RETRIES
+    if params and params.get("record_max_retries"):
+        try:
+            record_max_retries = max(1, min(int(params["record_max_retries"]), 10))
+        except (ValueError, TypeError):
+            pass
+
+    # Adaptive concurrency setup (AIMD)
+    init_concurrency = CONCURRENT_WORKERS
+    max_concurrency  = CONCURRENT_MAX
+    min_concurrency  = CONCURRENT_MIN
+    if params:
+        if params.get("concurrency"):
+            try:
+                init_concurrency = max(1, min(int(params["concurrency"]), CONCURRENT_MAX))
+            except (ValueError, TypeError):
+                pass
+        if params.get("concurrency_max"):
+            try:
+                max_concurrency = max(1, min(int(params["concurrency_max"]), 30))
+            except (ValueError, TypeError):
+                pass
+    adaptive = AdaptiveSemaphore(
+        initial=init_concurrency,
+        min_workers=min_concurrency,
+        max_workers=max_concurrency,
+        increase_after=AIUP_AFTER,
+    )
+    job["concurrency_stats"] = adaptive.stats
+
+    lock = threading.Lock()
+
+    def process_record(idx: int, rec: Dict[str, Any]):
+        """Process a single record with per-record retry on failure."""
         if job.get("status") == "cancelled":
-            break
+            return
         title = rec.get("title") or ""
         abstract = rec.get("abstract") or ""
         rid = rec.get("id", idx)
-        try:
-            # Pace requests to avoid rate limiting
-            now = time.time()
-            delta = now - last_call_ts
-            if delta < RATE_LIMIT_MIN_INTERVAL:
-                time.sleep(RATE_LIMIT_MIN_INTERVAL - delta)
-            # Build prompt (single canonical version)
-            prompt = build_prompt(synopsis, inc, exc, title, abstract)
-            out = call_openai_chat(model, prompt, api_key, params=params)
-            # Ensure per-criterion arrays exist even if the model omitted them
-            inc_eval = out.get("inclusion_evaluation") or []
-            exc_eval = out.get("exclusion_evaluation") or []
-            if not inc_eval and inc:
-                inc_eval = [{"criterion": c, "status": "unclear"} for c in inc]
-            if not exc_eval and exc:
-                exc_eval = [{"criterion": c, "status": "unclear"} for c in exc]
-            out["inclusion_evaluation"] = inc_eval
-            out["exclusion_evaluation"] = exc_eval
-            last_call_ts = time.time()
-        except Exception as e:
-            out = {"decision": "maybe", "rationale": f"error: {str(e)[:70]}"}
-        results.append({
+        prompt = build_prompt(synopsis, inc, exc, title, abstract)
+
+        out: Optional[Dict[str, Any]] = None
+        error_log: List[str] = []
+        attempts = 0
+
+        for attempt in range(1, record_max_retries + 1):
+            if job.get("status") == "cancelled":
+                return
+            attempts = attempt
+            try:
+                with adaptive:
+                    out = call_openai_chat(model, prompt, api_key, params=params)
+                    # Validate: decision must be one of the expected values
+                    decision = str(out.get("decision", "")).strip().lower()
+                    if decision not in {"include", "exclude", "maybe"}:
+                        raise ValueError(f"Unexpected decision value: {decision!r}")
+                # Signal success to the concurrency controller
+                adaptive.on_success()
+                # Success – stop retrying
+                break
+
+            except RateLimitError as e:
+                # Signal rate-limit to halve concurrency before retrying
+                adaptive.on_rate_limit()
+                err_msg = str(e)
+                error_log.append(f"attempt {attempt} [rate-limit]: {err_msg[:120]}")
+                out = None
+                # Honour Retry-After from the API, fallback to exponential backoff
+                wait = e.retry_after if e.retry_after > 0 else BASE_BACKOFF * (2 ** (attempt - 1))
+                time.sleep(min(wait + random.uniform(0, 0.5), 30.0))
+
+            except Exception as e:
+                err_msg = str(e)
+                error_log.append(f"attempt {attempt}: {err_msg[:120]}")
+                out = None
+                if attempt < record_max_retries:
+                    backoff = min(BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.3), 15.0)
+                    time.sleep(backoff)
+
+            finally:
+                # Refresh live stats after every attempt
+                job["concurrency_stats"] = adaptive.stats
+
+        if out is None:
+            # All retries exhausted – use a safe fallback and flag the record
+            out = {
+                "decision": "maybe",
+                "rationale": "screening failed after retries – manual review required",
+                "inclusion_evaluation": [{"criterion": c, "status": "unclear"} for c in inc],
+                "exclusion_evaluation": [{"criterion": c, "status": "unclear"} for c in exc],
+            }
+
+        # Ensure per-criterion arrays exist even if the model omitted them
+        inc_eval = out.get("inclusion_evaluation") or []
+        exc_eval = out.get("exclusion_evaluation") or []
+        if not inc_eval and inc:
+            inc_eval = [{"criterion": c, "status": "unclear"} for c in inc]
+        if not exc_eval and exc:
+            exc_eval = [{"criterion": c, "status": "unclear"} for c in exc]
+
+        entry = {
             "id": rid,
             "title": title,
             "abstract": abstract,
             "screening_decision": out["decision"],
             "screening_reason": out["rationale"],
-            "inclusion_evaluation": out.get("inclusion_evaluation", []),
-            "exclusion_evaluation": out.get("exclusion_evaluation", []),
-        })
-        job["processed"] = idx
-        job["results"] = results
-        # small additional jitter
-        time.sleep(random.uniform(0.0, 0.05))
+            "inclusion_evaluation": inc_eval,
+            "exclusion_evaluation": exc_eval,
+            "_retries": attempts - 1,          # 0 = succeeded on first try
+            "_error_log": error_log or None,   # None when no errors occurred
+        }
+        with lock:
+            results.append(entry)
+            job["processed"] = len(results)
+            job["results"] = list(results)
 
-    job["status"] = "done"
+    # Launch all records into a thread pool (pool size = ceiling, semaphore is the real gate)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        futures = []
+        for idx, rec in enumerate(records, start=1):
+            if job.get("status") == "cancelled":
+                break
+            futures.append(executor.submit(process_record, idx, rec))
+        for f in concurrent.futures.as_completed(futures):
+            if job.get("status") == "cancelled":
+                for pending in futures:
+                    pending.cancel()
+                break
+            try:
+                f.result()
+            except Exception:
+                pass
+
+    job["concurrency_stats"] = adaptive.stats
+    if job.get("status") != "cancelled":
+        job["status"] = "done"
 
 
 @app.post("/api/start")
@@ -386,13 +564,16 @@ def cancel(job_id: str):
 def status(job_id: str):
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="job nÃ£o encontrado")
-    return {
+        raise HTTPException(status_code=404, detail="job não encontrado")
+    resp: Dict[str, Any] = {
         "status": job.get("status"),
         "processed": job.get("processed", 0),
         "total": job.get("total", 0),
         "filename": job.get("filename"),
     }
+    if job.get("concurrency_stats"):
+        resp["concurrency"] = job["concurrency_stats"]
+    return resp
 
 
 @app.get("/api/progress/{job_id}")
@@ -413,6 +594,9 @@ def progress(job_id: str):
             status = j.get("status")
             if processed != last or status != "running":
                 payload = {"status": status, "processed": processed, "total": total}
+                # attach concurrency stats when available
+                if j.get("concurrency_stats"):
+                    payload["concurrency"] = j["concurrency_stats"]
                 # attach last result summary if present
                 try:
                     results = j.get("results") or []
@@ -450,12 +634,16 @@ def partial(job_id: str, since: int = 0, limit: int = 200):
     items = []
     for idx in range(start, end):
         r = results[idx]
-        items.append({
+        item: Dict[str, Any] = {
             "index": idx + 1,
             "id": r.get("id"),
             "decision": r.get("screening_decision"),
             "rationale": r.get("screening_reason"),
-        })
+        }
+        retries = r.get("_retries", 0)
+        if retries:
+            item["retries"] = retries
+        items.append(item)
     payload = {
         "status": status,
         "processed": processed,
@@ -466,6 +654,36 @@ def partial(job_id: str, since: int = 0, limit: int = 200):
     if status == "error" and job.get("error"):
         payload["error"] = str(job.get("error"))
     return JSONResponse(payload)
+
+@app.get("/api/errors/{job_id}")
+def record_errors(job_id: str):
+    """Return a summary of all records that required retries or ultimately failed."""
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    results = job.get("results") or []
+    problematic = []
+    for r in results:
+        retries = r.get("_retries", 0)
+        error_log = r.get("_error_log")
+        if retries or error_log:
+            problematic.append({
+                "id": r.get("id"),
+                "title": r.get("title", "")[:80],
+                "screening_decision": r.get("screening_decision"),
+                "screening_reason": r.get("screening_reason"),
+                "retries": retries,
+                "error_log": error_log,
+            })
+    failed = [p for p in problematic if p["error_log"] and len(p["error_log"]) == job.get("record_max_retries", RECORD_MAX_RETRIES)]
+    return JSONResponse({
+        "job_status": job.get("status"),
+        "total_records": job.get("total", 0),
+        "total_with_retries": len(problematic),
+        "total_failed": len(failed),
+        "records": problematic,
+    })
+
 
 @app.get("/api/result/{job_id}")
 def result(job_id: str, format: str = "csv"):
@@ -485,6 +703,8 @@ def result(job_id: str, format: str = "csv"):
         "screening_reason",
         "inclusion_evaluation",
         "exclusion_evaluation",
+        "_retries",
+        "_error_log",
     ]
 
     if (format or "").lower() == "xlsx":
