@@ -49,8 +49,8 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 # Override any value via environment variable without restarting the server.
 MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "5"))
 BASE_BACKOFF = float(os.getenv("OPENAI_BASE_BACKOFF", "1.0"))
-CONCURRENT_WORKERS = int(os.getenv("CONCURRENT_WORKERS", "40"))  # Tier 3 starting concurrency
-CONCURRENT_MAX     = int(os.getenv("CONCURRENT_MAX",     "60"))  # Tier 3 ceiling (AIMD grows up to here)
+CONCURRENT_WORKERS = int(os.getenv("CONCURRENT_WORKERS", "20"))  # Tier 3 starting concurrency
+CONCURRENT_MAX     = int(os.getenv("CONCURRENT_MAX",     "40"))  # Tier 3 ceiling (AIMD grows up to here)
 CONCURRENT_MIN     = int(os.getenv("CONCURRENT_MIN",     "2"))   # never drop below 2 even on 429s
 RECORD_MAX_RETRIES = int(os.getenv("RECORD_MAX_RETRIES", "3"))   # per-record retry attempts on error
 AIUP_AFTER         = int(os.getenv("AIUP_AFTER",         "5"))   # successes before +1 slot (faster ramp for Tier 3)
