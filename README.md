@@ -9,10 +9,9 @@ A platform for **automated screening** of scientific articles via OpenAI models 
 1. [Project Structure](#project-structure)
 2. [Quick Start](#quick-start)
 3. [Web Application (AI Screening)](#part-1--web-application-ai-screening)
-4. [Listfinal Filter Utility](#part-2--listfinal-filter-utility-filter_listfinalpy)
-5. [Unified Multi-Project Report](#part-3--unified-multi-project-report)
-6. [External Validation Guide](#part-4--external-validation-guide)
-7. [Kappa Interpretation](#kappa-interpretation-landis--koch-1977)
+4. [Unified Multi-Project Report](#part-2--unified-multi-project-report)
+5. [External Validation Guide](#part-3--external-validation-guide)
+6. [Kappa Interpretation](#kappa-interpretation-landis--koch-1977)
 
 ---
 
@@ -25,8 +24,6 @@ AI-tools/
 ├── app.js                      ← Frontend logic (JS)
 ├── style.css                   ← Frontend styles
 ├── logo.avif                   ← Application logo
-├── requirements.txt            ← Python dependencies
-├── filter_listfinal.py         ← Utility: filter Listfinal against reference PDFs
 ├── report/                     ← Unified report (multi-project)
 │   └── relatorio_unificado.py  ← Generates consolidated Word report
 ├── input/                      ← Input files (not versioned)
@@ -35,7 +32,6 @@ AI-tools/
 │   ├── Project - Fulltext.xlsx   ← Articles selected for full-text reading
 │   ├── Project - Listfinal.xlsx  ← Final included articles
 │   └── metadata.xlsx             ← Execution metadata (cost, tokens, etc.)
-├── PDF/                        ← Reference PDFs with included-studies lists
 ├── output/                     ← Generated reports (not versioned)
 │   └── relatorio_unificado_*.docx
 ├── .gitignore
@@ -57,16 +53,13 @@ AI-tools/
 # Clone the repository
 git clone https://github.com/YOUR-USER/AI-tools.git
 cd AI-tools
-
-# Install dependencies
-pip install -r requirements.txt
 ```
 
-If `requirements.txt` is not available, install manually:
+Install manually:
 
 ```bash
 pip install fastapi uvicorn requests pydantic
-pip install pandas numpy openpyxl python-docx PyPDF2
+pip install pandas numpy openpyxl python-docx
 ```
 
 > **Note:** The correct package is `python-docx` (not `docx`). If there's a conflict: `pip uninstall docx -y && pip install python-docx`.
@@ -153,35 +146,7 @@ All of the above can also be overridden **per-job** via the frontend Advanced Ba
 
 ---
 
-# Part 2 — Listfinal Filter Utility (`filter_listfinal.py`)
-
-## What It Does
-
-Filters `Project - Listfinal.xlsx` files by comparing against reference PDFs in `PDF/`. Removes articles that are **not** in the published included-studies list.
-
-Uses **PyPDF2** for text extraction and applies **6 matching strategies** to handle formatting differences, OCR artifacts, and line breaks.
-
-### Usage
-
-```bash
-# Process all projects
-python filter_listfinal.py
-
-# Process specific projects
-python filter_listfinal.py mino NMDA zebra
-```
-
-### PDF ↔ Project Mapping
-
-| Project | PDF | Expected Articles |
-|---------|-----|-------------------|
-| mino | `list_included_studies_mino.pdf` | 28 |
-| NMDA | `list_included_studies_nmda.pdf` | 264 |
-| zebra | `list_included_studies_zebrafish.pdf` | 108 |
-
----
-
-# Part 3 — Unified Multi-Project Report
+# Part 2 — Unified Multi-Project Report
 
 ## What It Does
 
@@ -308,7 +273,7 @@ Now placed at the **beginning** of the report (before Section 1) as a combined "
 
 ---
 
-# Part 4 — External Validation Guide
+# Part 3 — External Validation Guide
 
 This section explains how to **set up your own validation study** using this platform with your own systematic review data.
 
