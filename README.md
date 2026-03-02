@@ -3,6 +3,11 @@
   AI-Tools — Systematic Review AI Screening &amp; Diagnostic Evaluation
 </h1>
 
+<p>
+  <strong>Author:</strong> Francisco Marques (<a href="https://github.com/francisco-marques-silva">francisco-marques-silva</a>)<br>
+  <strong>Contact:</strong> <a href="mailto:francisco@pesquisaemdados.com.br">francisco@pesquisaemdados.com.br</a>
+</p>
+
 &nbsp;
 
 A platform for **automated screening** of scientific articles via OpenAI models and **diagnostic evaluation** comparing AI decisions against human reviewers in systematic reviews.
@@ -412,7 +417,7 @@ Create `metadata.xlsx` in the `input/` folder with one row per AI execution:
 
 | project | code | model | parameter | version | time_ia | time_human | tokens input | tokens_output | cost_input | cost_output | cost_total |
 |---------|------|-------|-----------|---------|---------|------------|--------------|---------------|------------|-------------|------------|
-| mino | 20260227 | gpt-5-mini | reasoning=medium | 5-mini | 0:04:32 | 2:00:00 | 152340 | 28450 | 0.023 | 0.114 | 0.137 |
+| mino | 20260227 | gpt-5-mini | reasoning=medium | 1º teste | 0:04:32 | 2:00:00 | 152340 | 28450 | 0.023 | 0.114 | 0.137 |
 
 **Column details:**
 
