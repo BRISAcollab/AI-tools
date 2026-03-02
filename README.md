@@ -74,7 +74,7 @@ AI-tools/
 
 If you have Git installed:
 ```powershell
-git clone https://github.com/YOUR-USER/AI-tools.git
+git clone https://github.com/BRISAcollab/AI-tools.git
 cd AI-tools
 ```
 
