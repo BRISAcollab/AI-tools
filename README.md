@@ -48,46 +48,104 @@ AI-tools/
 
 ## Quick Start
 
-### Prerequisites
+> This guide assumes **no prior programming knowledge**. Follow every step in order.
 
-- **Python 3.10+** (tested up to 3.14)
-- An **OpenAI API key** (for AI screening)
+---
 
-### Installation
+### Step 1 — Install Python
 
-```bash
-# Clone the repository
+1. Go to **https://www.python.org/downloads/**
+2. Click the yellow **"Download Python 3.x.x"** button (any version ≥ 3.10)
+3. Run the downloaded installer
+4. **Important:** On the first screen of the installer, check **"Add Python to PATH"** before clicking Install Now
+5. After installation finishes, close the installer
+
+**Verify it worked:** Open a terminal (see Step 2) and type `python --version`. You should see something like `Python 3.12.0`. If you see an error, reinstall Python and check that box.
+
+---
+
+### Step 2 — Open a Terminal
+
+**Windows:** Press `Windows + R`, type `powershell`, press Enter.
+
+---
+
+### Step 3 — Download the Project
+
+If you have Git installed:
+```powershell
 git clone https://github.com/YOUR-USER/AI-tools.git
 cd AI-tools
 ```
 
-Install manually:
-
-```bash
-pip install fastapi uvicorn requests pydantic
-pip install pandas numpy openpyxl python-docx
+Otherwise, on GitHub click **Code → Download ZIP**, extract it, then navigate to the folder in the terminal:
+```powershell
+cd "C:\path\to\AI-tools"
 ```
 
-> **Note:** The correct package is `python-docx` (not `docx`). If there's a conflict: `pip uninstall docx -y && pip install python-docx`.
+---
 
-### Running the Web App
+### Step 4 — Create a Virtual Environment
 
-```bash
-uvicorn scripts.backend:app --port 8000
+Run once to create an isolated Python environment for this project:
+
+```powershell
+python -m venv .venv
 ```
 
-Open **http://localhost:8000** in your browser.
+A `.venv` folder will appear — this is normal.
 
-### Generating Reports
+---
 
-```bash
-# Windows: set encoding first if needed
+### Step 5 — Install Dependencies
+
+```powershell
+.\.venv\Scripts\pip.exe install -r requirements.txt
+```
+
+This downloads all required libraries. It may take 1–2 minutes. Wait until the prompt returns.
+
+---
+
+### Step 6 — Run the Web Application
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn scripts.backend:app --reload --port 8000
+```
+
+You should see `Application startup complete.` — then open **http://localhost:8000** in your browser.
+
+> To stop the server: press `Ctrl + C` in the terminal.
+
+---
+
+### Step 7 — Generate a Report (optional)
+
+After placing your input files in `input/` (see [External Validation Guide](#part-3--external-validation-guide)):
+
+```powershell
 $env:PYTHONIOENCODING="utf-8"
-
-python report/relatorio_unificado.py
+.\.venv\Scripts\python.exe report\relatorio_unificado.py
 ```
 
-Output: `output/relatorio_unificado_YYYYMMDD_HHMMSS.docx`
+The report is saved to `output\relatorio_unificado_YYYYMMDD_HHMMSS.docx`.
+
+> Run `$env:PYTHONIOENCODING="utf-8"` once per terminal session before generating reports — it ensures accented characters display correctly on Windows.
+
+---
+
+### Every Time You Return
+
+You do **not** need to re-run Steps 1–5 again. Just open a terminal in the project folder:
+
+```powershell
+# Web app
+.\.venv\Scripts\python.exe -m uvicorn scripts.backend:app --reload --port 8000
+
+# Report
+$env:PYTHONIOENCODING="utf-8"
+.\.venv\Scripts\python.exe report\relatorio_unificado.py
+```
 
 ---
 
@@ -332,7 +390,7 @@ Only articles that survived full-text evaluation should appear here. The report 
 
 ### Step 4: Run AI Screening
 
-1. Start the web app: `uvicorn scripts.backend:app --port 8000`
+1. Start the web app: `.venv\Scripts\python.exe -m uvicorn scripts.backend:app --reload --port 8000` (from repo root)
 2. Open http://localhost:8000
 3. Select a model (e.g., GPT-5.2)
 4. Enter your API key
@@ -475,12 +533,15 @@ Absolute Efficiency → Section 12
 
 | Issue | Solution |
 |-------|----------|
-| `UnicodeEncodeError` on Windows | Set `$env:PYTHONIOENCODING="utf-8"` before running |
-| `No module named 'docx'` | Install `python-docx`: `pip install python-docx` |
-| Report finds no files | Check file naming conventions match exactly |
-| Metadata mismatch warnings | Ensure `project`, `code`, `model` in `metadata.xlsx` match AI result filenames |
-| XLSX library not loaded (web app) | Access via http://localhost:8000, not file:// |
-| `ModuleNotFoundError: uvicorn` | Install with `pip install uvicorn fastapi` |
+| `python` is not recognized | Python not added to PATH — reinstall Python and check "Add Python to PATH" on the first installer screen |
+| `.venv\Scripts\pip.exe` not found | Virtual environment not created — run `python -m venv .venv` from the project root folder |
+| `UnicodeEncodeError` on Windows | Run `$env:PYTHONIOENCODING="utf-8"` in the same terminal before the report command |
+| `No module named 'docx'` | Run `.\.venv\Scripts\pip.exe install python-docx` |
+| `No module named 'fastapi'` | Run `.\.venv\Scripts\pip.exe install -r requirements.txt` |
+| `Could not import module "backend"` | You must run the uvicorn command from the **project root folder** (`AI-tools/`), not from inside `scripts/` |
+| Report finds no files | Check that input files follow the exact naming conventions described in [File Naming Conventions](#file-naming-conventions) |
+| Metadata mismatch warnings | Ensure `project`, `code`, `model` in `metadata.xlsx` match the AI result filenames exactly (case-sensitive) |
+| XLSX library not loaded (web app) | Access the app via http://localhost:8000, not by opening `index.html` directly as a file |
 
 ---
 

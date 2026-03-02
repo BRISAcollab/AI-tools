@@ -4,9 +4,12 @@ __pycache__/
 *.bak
 *.pyc
 
-requirements.txt
+# Input files (track folder structure, not contents)
+input/*
+!input/.gitkeep
 
-# Dados e saídas
-input/
-output/
-PDF/
+# Output files (track folder structure, not contents)
+output/*
+!output/.gitkeep
+
+
