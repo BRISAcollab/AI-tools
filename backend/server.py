@@ -1114,7 +1114,18 @@ def report_worker(job_id: str):
 
 
 @app.post("/api/report/start")
-async def report_start(files: list[UploadFile] = File(...)):
+async def report_start(
+    files: list[UploadFile] = File(...),
+    project_classes: str = "",
+):
+    """Start a report job.
+
+    `project_classes` is an optional JSON string mapping `project_norm` →
+    'pilot' | 'official' | 'sensitivity'. Persisted as
+    `<input_dir>/_project_classes.json` so `main.py` picks it up and threads
+    it through the pipeline. If omitted / invalid, the report falls back to
+    the default lists in `constants.py`.
+    """
     job_id = str(uuid.uuid4())
     tmp = tempfile.mkdtemp(prefix="aireport_")
     input_dir = str(_Path(tmp) / "input")
@@ -1136,6 +1147,23 @@ async def report_start(files: list[UploadFile] = File(...)):
         shutil.rmtree(tmp, ignore_errors=True)
         raise HTTPException(status_code=400, detail="No files received.")
 
+    # Persist project classification if supplied
+    classes_obj: Dict[str, str] = {}
+    if project_classes:
+        try:
+            parsed = json.loads(project_classes)
+            if isinstance(parsed, dict):
+                for k, v in parsed.items():
+                    if isinstance(v, str) and v.strip().lower() in ("pilot", "official", "sensitivity"):
+                        classes_obj[str(k)] = v.strip().lower()
+        except Exception:
+            classes_obj = {}
+    if classes_obj:
+        (_Path(input_dir) / "_project_classes.json").write_text(
+            json.dumps(classes_obj, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     REPORT_JOBS[job_id] = {
         "status": "running",
         "log": [],
@@ -1144,10 +1172,11 @@ async def report_start(files: list[UploadFile] = File(...)):
         "tmp": tmp,
         "output_files": [],
         "uploaded_files": saved,
+        "project_classes": classes_obj,
     }
     th = threading.Thread(target=report_worker, args=(job_id,), daemon=True)
     th.start()
-    return {"job_id": job_id, "files": saved}
+    return {"job_id": job_id, "files": saved, "project_classes": classes_obj}
 
 
 @app.get("/api/report/stream/{job_id}")

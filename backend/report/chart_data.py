@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .utils import normalise_model_name, compute_f1_lf, compute_metrics_vs_lf
+from .constants import project_category
 
 
 # =====================================================================
@@ -595,10 +596,95 @@ def _build_fulltext_hours_saved(projects, all_results):
 
 
 # =====================================================================
+#  PAPER-ONLY SHEETS (used by Figures 2 & 3 in the paper section)
+# =====================================================================
+#
+# Both sheets restrict to `official` projects (see constants.PROJECT_CATEGORIES).
+# One row per model, averaged across the 3 official projects × 2 tests, with
+# standard deviation for error bars.
+
+def _build_paper_sens_spec_lf(projects, all_results, project_classes=None):
+    """Sheet: paper_sens_spec_lf — Model, Sens_LF_pct_mean/sd, Spec_LF_pct_mean/sd."""
+    diag = all_results.get("diagnostic", {})
+    lf = all_results.get("listfinal", {})
+    model_agg = {}
+    for pn in sorted(projects):
+        if project_category(pn, overrides=project_classes) != "official":
+            continue
+        proj = projects[pn]
+        for mn in sorted(proj["models"]):
+            mname = proj["models"][mn]["name"]
+            entry = model_agg.setdefault(mname, {"sens": [], "spec": []})
+            for tn, r in diag.get(pn, {}).get(mn, {}).items():
+                if r is None:
+                    continue
+                lf_res = lf.get(pn, {}).get(mn, {}).get(tn)
+                mlf = compute_metrics_vs_lf(r["n_paired"], r["tp"] + r["fp"], lf_res)
+                if not np.isnan(mlf["sens_lf"]): entry["sens"].append(mlf["sens_lf"])
+                if not np.isnan(mlf["spec_lf"]): entry["spec"].append(mlf["spec_lf"])
+
+    rows = []
+    for mname, d in model_agg.items():
+        if not d["sens"] and not d["spec"]:
+            continue
+        rows.append({
+            "Model": mname,
+            "N_points": len(d["sens"]),
+            "Sens_LF_pct_mean": (np.mean(d["sens"]) * 100) if d["sens"] else float("nan"),
+            "Sens_LF_pct_sd":   (np.std(d["sens"])  * 100) if len(d["sens"]) > 1 else 0.0,
+            "Spec_LF_pct_mean": (np.mean(d["spec"]) * 100) if d["spec"] else float("nan"),
+            "Spec_LF_pct_sd":   (np.std(d["spec"])  * 100) if len(d["spec"]) > 1 else 0.0,
+        })
+    return pd.DataFrame(rows) if rows else None
+
+
+def _build_paper_f1_vs_cost_official(projects, all_results, metadados, project_classes=None):
+    """Sheet: paper_f1_vs_cost_official — Model, Avg_Cost_USD, Avg_F1_LF (± SD).
+
+    Same signature as f1_vs_cost but restricted to official projects only.
+    """
+    if metadados is None or "code" not in metadados.columns:
+        return None
+    diag = all_results.get("diagnostic", {})
+    lf = all_results.get("listfinal", {})
+    model_data = {}
+    for pn in sorted(projects):
+        if project_category(pn, overrides=project_classes) != "official":
+            continue
+        proj = projects[pn]
+        for mn in sorted(proj["models"]):
+            mname = proj["models"][mn]["name"]
+            entry = model_data.setdefault(mname, {"cost": [], "f1_lf": []})
+            for tn in proj["models"][mn]["tests"]:
+                code = proj["models"][mn]["tests"][tn]["code"]
+                meta_m = metadados[metadados["code"].astype(str) == str(code)]
+                if not meta_m.empty and pd.notna(meta_m.iloc[0].get("cost_total")):
+                    entry["cost"].append(meta_m.iloc[0]["cost_total"])
+                r = diag.get(pn, {}).get(mn, {}).get(tn)
+                lr = lf.get(pn, {}).get(mn, {}).get(tn)
+                f1_lf = compute_f1_lf(r, lr)
+                if not np.isnan(f1_lf):
+                    entry["f1_lf"].append(f1_lf)
+    rows = []
+    for mname, d in model_data.items():
+        if not (d["cost"] and d["f1_lf"]):
+            continue
+        rows.append({
+            "Model": mname,
+            "Avg_Cost_USD":   np.mean(d["cost"]),
+            "Avg_Cost_USD_sd": (np.std(d["cost"]) if len(d["cost"]) > 1 else 0.0),
+            "Avg_F1_LF":      np.mean(d["f1_lf"]),
+            "Avg_F1_LF_sd":   (np.std(d["f1_lf"]) if len(d["f1_lf"]) > 1 else 0.0),
+        })
+    return pd.DataFrame(rows) if rows else None
+
+
+# =====================================================================
 #  PUBLIC API
 # =====================================================================
 
-def export_chart_data(projects, all_results, metadados, output_dir: Path) -> Path:
+def export_chart_data(projects, all_results, metadados, output_dir: Path,
+                       project_classes: dict | None = None) -> Path:
     """Build all chart DataFrames and write them to data_grafics_<timestamp>.xlsx.
 
     Returns the path to the generated XLSX.
@@ -620,6 +706,10 @@ def export_chart_data(projects, all_results, metadados, output_dir: Path) -> Pat
         ("model_ranking_heatmap",    lambda: _build_model_ranking_heatmap(projects, all_results, metadados)),
         ("fulltext_hours_saved",     lambda: _build_fulltext_hours_saved(projects, all_results)),
         ("human_vs_lf",              lambda: _build_human_vs_lf(projects, all_results)),
+        # Paper-only sheets (official projects only) — used by Figures 2 & 3.
+        # Honour the classification supplied by the web UI (project_classes).
+        ("paper_sens_spec_lf",           lambda: _build_paper_sens_spec_lf(projects, all_results, project_classes=project_classes)),
+        ("paper_f1_vs_cost_official",    lambda: _build_paper_f1_vs_cost_official(projects, all_results, metadados, project_classes=project_classes)),
     ]
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

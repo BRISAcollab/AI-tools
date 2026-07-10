@@ -1362,6 +1362,105 @@ code {
   color: var(--muted);
 }
 
+/* ===== Report tab — project classification ===== */
+.project-class-section {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.project-class-header { margin-bottom: 10px; }
+.project-class-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.project-class-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.project-class-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.project-class-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.project-class-row .project-class-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-class-radios {
+  display: flex;
+  gap: 4px;
+}
+.project-class-radios label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--text-secondary);
+  background: var(--card);
+  transition: all var(--transition);
+}
+.project-class-radios label:hover {
+  border-color: var(--primary);
+}
+.project-class-radios input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.project-class-radios input[type="radio"]:checked + span {
+  font-weight: 600;
+}
+.project-class-radios label:has(input[value="pilot"]:checked) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+  color: #374151;
+}
+.project-class-radios label:has(input[value="official"]:checked) {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+}
+.project-class-radios label:has(input[value="sensitivity"]:checked) {
+  background: #fef3c7;
+  border-color: #d97706;
+  color: #92400e;
+}
+[data-theme="dark"] .project-class-radios label:has(input[value="pilot"]:checked) {
+  background: rgba(156,163,175,0.18); color: #d1d5db; border-color: rgba(156,163,175,0.45);
+}
+[data-theme="dark"] .project-class-radios label:has(input[value="official"]:checked) {
+  background: rgba(16,185,129,0.18); color: #6ee7b7; border-color: rgba(16,185,129,0.45);
+}
+[data-theme="dark"] .project-class-radios label:has(input[value="sensitivity"]:checked) {
+  background: rgba(217,119,6,0.18); color: #fcd34d; border-color: rgba(217,119,6,0.45);
+}
+
 /* ===== Full-text pane ===== */
 .pane-header-fulltext {
   background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);

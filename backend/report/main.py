@@ -345,9 +345,27 @@ def main():
     # ---- Run analyses ----
     all_results = run_all_analyses(projects, metadados)
 
+    # ---- Load project classification (from web UI or fall back to constants) ----
+    import json as _json
+    project_classes: dict = {}
+    classes_file = input_dir / "_project_classes.json"
+    if classes_file.exists():
+        try:
+            project_classes = _json.loads(classes_file.read_text(encoding="utf-8"))
+            if not isinstance(project_classes, dict):
+                project_classes = {}
+        except Exception as _exc:
+            print(f"    ⚠ Could not read {classes_file.name}: {_exc}")
+            project_classes = {}
+    if project_classes:
+        print(f"  Project classification from UI ({len(project_classes)} entries):")
+        for pn, cat in project_classes.items():
+            print(f"    {pn} → {cat}")
+
     # ---- Generate Word reports ----
     print("\n  Generating Word reports...")
-    report_paths = generate_report(projects, metadados, all_results, output_dir)
+    report_paths = generate_report(projects, metadados, all_results, output_dir,
+                                    project_classes=project_classes)
     if report_paths:
         print(f"\n  ✓ Reports generated ({len(report_paths)} files):")
         for p in report_paths:
@@ -355,7 +373,8 @@ def main():
 
     # ---- Export chart data XLSX ----
     print("  Exporting chart data XLSX...")
-    xlsx_path = export_chart_data(projects, all_results, metadados, output_dir)
+    xlsx_path = export_chart_data(projects, all_results, metadados, output_dir,
+                                   project_classes=project_classes)
     print(f"  ✓ Chart data exported: {xlsx_path.name}")
 
     # ---- Generate FP workspace XLSX ----

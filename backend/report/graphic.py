@@ -1244,6 +1244,102 @@ else:
 
 
 # ──────────────────────────────────────────────────────────────────────
+#  PAPER FIGURE 2 — Sensitivity × Specificity (vs Listfinal, official-only)
+# ──────────────────────────────────────────────────────────────────────
+
+if "paper_sens_spec_lf" in sheets:
+    df = sheets["paper_sens_spec_lf"]
+    if not df.empty:
+        fig, ax = plt.subplots(figsize=(7.5, 6))
+        ax.set_facecolor("#FAFAFA")
+        ax.axhspan(95, 106, xmin=0.5, xmax=1, color="#D5F5E3", alpha=0.22, zorder=0)
+
+        model_labels = df["Model"].tolist()
+        for mi, (_, row) in enumerate(df.iterrows()):
+            key = row["Model"].strip().lower().replace(" ", "_").replace("-", "_")
+            color = MODEL_COLORS.get(key, DEFAULT_COLORS[mi % len(DEFAULT_COLORS)])
+            x_mean, x_sd = row["Sens_LF_pct_mean"], row.get("Sens_LF_pct_sd", 0) or 0
+            y_mean, y_sd = row["Spec_LF_pct_mean"], row.get("Spec_LF_pct_sd", 0) or 0
+            if np.isnan(x_mean) or np.isnan(y_mean):
+                continue
+            ax.errorbar(x_mean, y_mean, xerr=x_sd, yerr=y_sd, fmt="none",
+                        ecolor=color, elinewidth=1.2, capsize=4, alpha=0.55, zorder=4)
+            ax.scatter(x_mean, y_mean, s=220, color=color, edgecolors="white",
+                        linewidth=2, zorder=6)
+            ax.annotate(row["Model"], (x_mean, y_mean),
+                        xytext=(8, 8), textcoords="offset points",
+                        fontsize=9, fontweight="bold")
+
+        ax.axhline(y=95, color="#27AE60", linestyle="--", alpha=0.55, linewidth=1)
+        ax.annotate("IDEAL", xy=(97, 97), fontsize=9, fontweight="bold",
+                    color="#27AE60", alpha=0.6, ha="right")
+
+        ax.set_title("Figure 2 — Sensitivity vs Specificity against Listfinal\n"
+                      "(mean ± SD across the 3 official projects)",
+                      fontsize=11, fontweight="bold", pad=10)
+        ax.set_xlabel("Sensitivity vs Listfinal (%)", fontsize=10)
+        ax.set_ylabel("Specificity vs Listfinal (%)", fontsize=10)
+        ax.set_xlim(0, 105)
+        ax.set_ylim(0, 105)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(True, alpha=0.28)
+        plt.tight_layout()
+        fig.savefig(str(out_dir / f"paper_fig2_sens_spec_lf.{FIG_FORMAT}"),
+                    dpi=DPI, bbox_inches="tight", facecolor=FACECOLOR, edgecolor="none")
+        plt.close(fig)
+        print(f"    ✓ paper_fig2_sens_spec_lf.{FIG_FORMAT}")
+        generated += 1
+else:
+    print("    ⚠ Sheet 'paper_sens_spec_lf' not found — skipping Paper Fig. 2")
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  PAPER FIGURE 3 — F1 (vs Listfinal) × Cost, official-only
+# ──────────────────────────────────────────────────────────────────────
+
+if "paper_f1_vs_cost_official" in sheets:
+    df = sheets["paper_f1_vs_cost_official"]
+    if not df.empty:
+        fig, ax = plt.subplots(figsize=(7.5, 5.5))
+        ax.set_facecolor("#FAFAFA")
+
+        for mi, (_, row) in enumerate(df.iterrows()):
+            key = row["Model"].strip().lower().replace(" ", "_").replace("-", "_")
+            color = MODEL_COLORS.get(key, DEFAULT_COLORS[mi % len(DEFAULT_COLORS)])
+            x, x_sd = row["Avg_Cost_USD"], row.get("Avg_Cost_USD_sd", 0) or 0
+            y, y_sd = row["Avg_F1_LF"],   row.get("Avg_F1_LF_sd", 0) or 0
+            ax.errorbar(x, y, xerr=x_sd, yerr=y_sd, fmt="none",
+                        ecolor=color, elinewidth=1.2, capsize=4, alpha=0.55, zorder=4)
+            ax.scatter(x, y, s=220, color=color, edgecolors="white",
+                        linewidth=2, zorder=6)
+            ax.annotate(row["Model"], (x, y),
+                        xytext=(8, 8), textcoords="offset points",
+                        fontsize=9, fontweight="bold")
+
+        ax.axhline(y=0.95, color="#27AE60", linestyle="--", alpha=0.55,
+                    linewidth=1, label="F1 = 0.95")
+        ax.set_title("Figure 3 — F1 (vs Listfinal) vs Cost per Model\n"
+                      "(mean ± SD across the 3 official projects)",
+                      fontsize=11, fontweight="bold", pad=10)
+        ax.set_xlabel("Average Cost per run (USD)", fontsize=10)
+        ax.set_ylabel("F1 vs Listfinal", fontsize=10)
+        ax.set_ylim(0, 1.05)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.grid(True, alpha=0.28)
+        ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
+        plt.tight_layout()
+        fig.savefig(str(out_dir / f"paper_fig3_f1_vs_cost.{FIG_FORMAT}"),
+                    dpi=DPI, bbox_inches="tight", facecolor=FACECOLOR, edgecolor="none")
+        plt.close(fig)
+        print(f"    ✓ paper_fig3_f1_vs_cost.{FIG_FORMAT}")
+        generated += 1
+else:
+    print("    ⚠ Sheet 'paper_f1_vs_cost_official' not found — skipping Paper Fig. 3")
+
+
+# ──────────────────────────────────────────────────────────────────────
 #  SUMMARY
 # ──────────────────────────────────────────────────────────────────────
 

@@ -40,6 +40,7 @@ function renderReportFileList() {
     btn.addEventListener('click', () => {
       reportState.files.splice(Number(btn.dataset.idx), 1);
       renderReportFileList();
+      refreshProjectClassification();
       btnGenReport.disabled = !reportState.files.length;
     });
   });
@@ -51,6 +52,101 @@ function addReportFiles(fileList) {
     if (!reportState.files.find(x => x.name === f.name)) reportState.files.push(f);
   }
   renderReportFileList();
+  refreshProjectClassification();
+}
+
+// ── Project classification (used by Paper Figures & Tables) ────────────────
+
+const AI_FILENAME_RE  = /^(\d{8})\s*-\s*(.+?)\s*-\s*(\d)[ºo°]\s*teste\s*-\s*(.+)\.(?:xlsx|xls|csv)$/i;
+const HUMAN_FILENAME_RE = /^(.+?)\s*-\s*(?:TIAB|Fulltext|Listfinal)\.(?:xlsx|xls|csv)$/i;
+const _CLASS_LS_KEY = "reportProjectClasses";
+
+/** Extract normalized project keys from the current file list. */
+function detectProjectsFromFiles() {
+  const set = new Map();  // project_norm -> display name (last seen)
+  for (const f of reportState.files) {
+    const name = f.name;
+    let display = null;
+    const mAi = name.match(AI_FILENAME_RE);
+    if (mAi) display = mAi[4].trim();
+    const mHu = name.match(HUMAN_FILENAME_RE);
+    if (!display && mHu) display = mHu[1].trim();
+    if (display) {
+      const norm = display.trim().toLowerCase();
+      set.set(norm, display);
+    }
+  }
+  return Array.from(set.entries()).map(([norm, disp]) => ({ norm, display: disp }));
+}
+
+/** Guess the default category from a project name (falls back to 'official'). */
+function guessDefaultCategory(projNorm) {
+  const s = String(projNorm).toLowerCase();
+  if (/mino/.test(s))     return "pilot";
+  if (/modified|mod$/.test(s)) return "sensitivity";
+  return "official";
+}
+
+/** Render or refresh the classification UI based on currently uploaded files. */
+function refreshProjectClassification() {
+  const section = document.getElementById("projectClassSection");
+  const list = document.getElementById("projectClassList");
+  if (!section || !list) return;
+
+  const detected = detectProjectsFromFiles();
+  if (!detected.length) {
+    section.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+
+  // Load previously saved choices (persisted across reloads)
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(_CLASS_LS_KEY) || "{}"); } catch {}
+
+  section.classList.remove("hidden");
+  list.innerHTML = detected.map(({ norm, display }) => {
+    const current = saved[norm] || guessDefaultCategory(norm);
+    const opt = (val, label) => `
+      <label>
+        <input type="radio" name="pclass_${norm}" value="${val}" ${current === val ? "checked" : ""} />
+        <span>${label}</span>
+      </label>`;
+    return `<div class="project-class-row" data-project="${norm}">
+      <span class="project-class-name" title="${display}">${display}
+        <span class="muted" style="font-size:11px; margin-left:6px;">(${norm})</span>
+      </span>
+      <div class="project-class-radios">
+        ${opt("pilot", "Pilot")}
+        ${opt("official", "Official")}
+        ${opt("sensitivity", "Sensitivity")}
+      </div>
+    </div>`;
+  }).join("");
+
+  // Persist choices whenever the user changes them
+  list.querySelectorAll('input[type="radio"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      const row = radio.closest(".project-class-row");
+      if (!row) return;
+      const pn = row.dataset.project;
+      let store = {};
+      try { store = JSON.parse(localStorage.getItem(_CLASS_LS_KEY) || "{}"); } catch {}
+      store[pn] = radio.value;
+      localStorage.setItem(_CLASS_LS_KEY, JSON.stringify(store));
+    });
+  });
+}
+
+/** Read the current classification from the UI (project_norm -> category). */
+function readProjectClassification() {
+  const out = {};
+  document.querySelectorAll("#projectClassList .project-class-row").forEach(row => {
+    const pn = row.dataset.project;
+    const checked = row.querySelector('input[type="radio"]:checked');
+    if (pn && checked) out[pn] = checked.value;
+  });
+  return out;
 }
 
 reportDropzone.addEventListener('dragover', e => { e.preventDefault(); reportDropzone.classList.add('hover'); });
@@ -61,6 +157,7 @@ reportFileInput.addEventListener('change', e => { if (e.target.files.length) { a
 btnClearReport.addEventListener('click', () => {
   reportState.files = [];
   renderReportFileList();
+  refreshProjectClassification();
   btnGenReport.disabled = true;
   reportProgressCard.classList.add('hidden');
   reportDownloads.classList.add('hidden');
@@ -237,6 +334,12 @@ btnGenReport.addEventListener('click', async () => {
 
   const form = new FormData();
   reportState.files.forEach(f => form.append('files', f, f.name));
+
+  // Include the user-provided project classification (pilot/official/sensitivity)
+  const classification = readProjectClassification();
+  if (Object.keys(classification).length) {
+    form.append('project_classes', JSON.stringify(classification));
+  }
 
   let jobId;
   try {

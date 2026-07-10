@@ -37,16 +37,21 @@ from .docx_helpers import (
     shade, set_cell, add_borders,
     add_heading, add_note, header_row,
 )
+from .constants import project_category, project_sort_key
 
 
 # =====================================================================
 #  Public orchestrator
 # =====================================================================
 
-def generate_report(projects, metadados, all_results, output_dir: Path):
+def generate_report(projects, metadados, all_results, output_dir: Path,
+                     project_classes: dict | None = None):
     """Generate the cross-project report + one per-project report.
 
     Returns a list of pathlib.Path objects: [general, project_1, project_2, …].
+
+    `project_classes` is an optional dict `{project_norm: 'pilot'|'official'|'sensitivity'}`
+    supplied by the web UI. If omitted, falls back to the constants module lists.
     """
     ts_file = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +59,8 @@ def generate_report(projects, metadados, all_results, output_dir: Path):
 
     # General (cross-project) report
     general_path = output_dir / f"relatorio_geral_{ts_file}.docx"
-    _build_general_doc(projects, metadados, all_results).save(str(general_path))
+    _build_general_doc(projects, metadados, all_results,
+                        project_classes=project_classes).save(str(general_path))
     paths.append(general_path)
 
     # One report per project
@@ -112,9 +118,14 @@ def _human_metrics_vs_lf(hu_lf, pn):
 #  General (cross-project) document
 # =====================================================================
 
-def _build_general_doc(projects, metadados, all_results):
+def _build_general_doc(projects, metadados, all_results, project_classes=None):
     """Cross-project summary report: cover, methodology and sections 1, 2, 5,
-    7, 8, 9, 10, 11, 12, 13."""
+    7, 8, 9, 10, 11, 12, 13.
+
+    `project_classes` (optional): dict mapping `project_norm` → category
+    ('pilot'|'official'|'sensitivity'). If not provided, falls back to the
+    constants module lists.
+    """
     doc = _setup_doc()
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     table_counter = [0]
@@ -1336,6 +1347,313 @@ def _build_general_doc(projects, metadados, all_results):
                     set_cell(tbl.cell(i + 1, j), val, font_size=Pt(8), align=align)
 
         doc.add_paragraph()
+
+    # ==================================================================
+    #  SECTION 14 — PAPER FIGURES & TABLES
+    # ==================================================================
+    doc.add_page_break()
+    add_heading(doc, "14. Paper Figures & Tables", level=1)
+    add_note(doc,
+        "Tables and figures formatted for direct inclusion in a manuscript. "
+        "Projects are grouped by role: pilot (prompt optimisation), official "
+        "(primary comparison — the 3 projects that count) and sensitivity "
+        "(robustness analyses). Non-official rows are shaded grey; the human "
+        "reviewer baseline appears in Table 3 with a yellow shade. Edit the "
+        "project category lists in `backend/report/constants.py` to reflect "
+        "your project names.")
+
+    # Helper: iterate (pn, mn, project_info, model_info) in the paper's row order
+    def _paper_rows_iter():
+        for pn in sorted(projects.keys(), key=lambda p: project_sort_key(p, overrides=project_classes)):
+            proj_i = projects[pn]
+            for mn in sorted(proj_i["models"].keys()):
+                yield pn, mn, proj_i, proj_i["models"][mn]
+
+    # Category → shade colour (row background)
+    _CAT_SHADE = {
+        "pilot":       "E5E7EB",  # neutral grey
+        "sensitivity": "E5E7EB",
+        "official":    None,      # no shade
+    }
+    _HUMAN_SHADE = "FEF3C7"       # yellow (baseline row)
+
+    # ---- Time / cost helpers (reused across Tables 1 and 2) ----------
+    def _hours_from_str(val):
+        if metadados is None or pd.isna(val):
+            return float("nan")
+        if isinstance(val, pd.Timedelta):
+            return val.total_seconds() / 3600.0
+        s = str(val).strip()
+        if not s:
+            return float("nan")
+        try:
+            return pd.to_timedelta(s).total_seconds() / 3600.0
+        except Exception:
+            return float("nan")
+
+    def _fmt_hours(h):
+        if np.isnan(h):
+            return "-"
+        hr = int(h)
+        mn = int((h - hr) * 60)
+        return f"{hr}h {mn:02d}m" if hr > 0 else f"{mn}m"
+
+    def _meta_for(code):
+        if metadados is None or not code:
+            return None
+        m = metadados[metadados["code"].astype(str) == str(code)]
+        return m.iloc[0] if not m.empty else None
+
+    def _sum_hours_and_cost(mi):
+        """Aggregate time_ia (hours), cost_total ($) and TIAB paired N across
+        both tests of one (project, model) pair."""
+        total_hours = 0.0; had_hours = False
+        total_cost = 0.0;  had_cost  = False
+        for tn2 in sorted(mi["tests"].keys()):
+            row = _meta_for(mi["tests"][tn2]["code"])
+            if row is None:
+                continue
+            h = _hours_from_str(row.get("time_ia"))
+            if not np.isnan(h):
+                total_hours += h; had_hours = True
+            c = row.get("cost_total")
+            if pd.notna(c):
+                total_cost += float(c); had_cost = True
+        return (total_hours if had_hours else float("nan"),
+                total_cost if had_cost else float("nan"))
+
+    def _n_paired(pn, mn):
+        """Return the (paired) TIAB N for this project/model — first non-null test."""
+        d = diag.get(pn, {}).get(mn, {}) or {}
+        for tn2 in sorted(d.keys()):
+            r = d[tn2]
+            if r is not None:
+                return r["n_paired"]
+        return None
+
+    # ------------------------------------------------------------------
+    #  Table 1 — Descriptive analysis of the process
+    # ------------------------------------------------------------------
+    tn_num = next_table()
+    add_heading(doc, f"Table {tn_num}. Descriptive analysis of the process", level=2)
+
+    t1_headers = ["Model", "Project", "# Articles", "Total Time",
+                   "Total Cost ($)", "Kappa (T-R)", "Inclusion Rate",
+                   "Time / article", "Cost / article"]
+    t1_rows = []
+    for pn, mn, proj_i, mi in _paper_rows_iter():
+        model_name = mi["name"]
+        proj_name = proj_i["name"]
+        cat = project_category(pn, overrides=project_classes)
+
+        n_arts = _n_paired(pn, mn)
+        total_h, total_c = _sum_hours_and_cost(mi)
+
+        # Inclusion rate = fraction of TIAB paired articles the AI marked include/maybe
+        inc_rates = []
+        for tn2 in sorted(mi["tests"].keys()):
+            r = diag.get(pn, {}).get(mn, {}).get(tn2)
+            if r and r["n_paired"] > 0:
+                inc_rates.append((r["tp"] + r["fp"]) / r["n_paired"])
+        avg_inc = np.mean(inc_rates) if inc_rates else float("nan")
+
+        # Test-retest agreement (kappa)
+        tr_r = tr.get(pn, {}).get(mn)
+        kappa_tr = fmt(tr_r["kappa"], 3) if tr_r else "-"
+
+        n_arts_str = str(n_arts) if n_arts is not None else "-"
+        time_per = (total_h * 60 / n_arts) if (n_arts and not np.isnan(total_h) and n_arts > 0) else float("nan")
+        cost_per = (total_c / n_arts)     if (n_arts and not np.isnan(total_c) and n_arts > 0) else float("nan")
+
+        t1_rows.append((cat, [
+            model_name, proj_name, n_arts_str,
+            _fmt_hours(total_h),
+            fmt(total_c, 2) if not np.isnan(total_c) else "-",
+            kappa_tr,
+            fmt_pct(avg_inc),
+            f"{time_per:.1f} min" if not np.isnan(time_per) else "-",
+            f"${cost_per:.4f}" if not np.isnan(cost_per) else "-",
+        ]))
+
+    tbl = doc.add_table(rows=1 + len(t1_rows), cols=len(t1_headers))
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    add_borders(tbl)
+    header_row(tbl, t1_headers)
+    for i, (cat, row_data) in enumerate(t1_rows):
+        for j, val in enumerate(row_data):
+            align = WD_ALIGN_PARAGRAPH.LEFT if j <= 1 else WD_ALIGN_PARAGRAPH.CENTER
+            set_cell(tbl.cell(i + 1, j), val, font_size=Pt(8), align=align)
+        if _CAT_SHADE.get(cat):
+            for j in range(len(row_data)):
+                shade(tbl.cell(i + 1, j), _CAT_SHADE[cat])
+
+    doc.add_paragraph()
+    add_note(doc, "Grey rows: pilot (prompt optimisation) and sensitivity analyses "
+             "— not part of the primary comparison.")
+
+    # ------------------------------------------------------------------
+    #  Table 2 — vs Human TIAB screening
+    # ------------------------------------------------------------------
+    tn_num = next_table()
+    add_heading(doc, f"Table {tn_num}. Model performance vs Human TIAB screening", level=2)
+
+    t2_headers = ["Model", "Project", "Sens. (TIAB)", "Spec. (TIAB)",
+                   "F1 (TIAB)", "Workload Reduction (TIAB)"]
+    t2_rows = []
+    for pn, mn, proj_i, mi in _paper_rows_iter():
+        model_name = mi["name"]
+        proj_name = proj_i["name"]
+        cat = project_category(pn, overrides=project_classes)
+
+        sens_l, spec_l, f1_l, red_l = [], [], [], []
+        for tn2 in sorted(mi["tests"].keys()):
+            r = diag.get(pn, {}).get(mn, {}).get(tn2)
+            if not r:
+                continue
+            m = r["metrics"]
+            if not np.isnan(m["Sensitivity"]): sens_l.append(m["Sensitivity"])
+            if not np.isnan(m["Specificity"]): spec_l.append(m["Specificity"])
+            if not np.isnan(m["F1 Score"]):    f1_l.append(m["F1 Score"])
+            hu_pos = r["tp"] + r["fn"]
+            ai_pos = r["tp"] + r["fp"]
+            if hu_pos > 0:
+                red_l.append((hu_pos - ai_pos) / hu_pos)
+
+        t2_rows.append((cat, [
+            model_name, proj_name,
+            fmt_pct(np.mean(sens_l)) if sens_l else "-",
+            fmt_pct(np.mean(spec_l)) if spec_l else "-",
+            fmt(np.mean(f1_l), 3)    if f1_l    else "-",
+            fmt_pct(np.mean(red_l))  if red_l   else "-",
+        ]))
+
+    tbl = doc.add_table(rows=1 + len(t2_rows), cols=len(t2_headers))
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    add_borders(tbl)
+    header_row(tbl, t2_headers)
+    for i, (cat, row_data) in enumerate(t2_rows):
+        for j, val in enumerate(row_data):
+            align = WD_ALIGN_PARAGRAPH.LEFT if j <= 1 else WD_ALIGN_PARAGRAPH.CENTER
+            set_cell(tbl.cell(i + 1, j), val, font_size=Pt(8), align=align)
+        if _CAT_SHADE.get(cat):
+            for j in range(len(row_data)):
+                shade(tbl.cell(i + 1, j), _CAT_SHADE[cat])
+
+    doc.add_paragraph()
+    add_note(doc, "Workload Reduction (TIAB) = fraction fewer articles selected "
+             "by the AI vs the human at title/abstract stage. Positive = the AI "
+             "is more selective. Grey rows: not part of the primary comparison.")
+
+    # ------------------------------------------------------------------
+    #  Table 3 — vs Listfinal (full-text) gold standard
+    # ------------------------------------------------------------------
+    tn_num = next_table()
+    add_heading(doc, f"Table {tn_num}. Performance vs Listfinal (full-text) gold standard", level=2)
+
+    t3_headers = ["Entity", "Project", "Sens. (LF)", "Spec. (LF)",
+                   "F1 (LF)", "Workload Change (FT)"]
+    t3_rows = []
+    # Group by project so we can insert the Human baseline row per project
+    last_pn = None
+    for pn, mn, proj_i, mi in _paper_rows_iter():
+        cat = project_category(pn, overrides=project_classes)
+        model_name = mi["name"]
+        proj_name = proj_i["name"]
+
+        sens_l, spec_l, f1_l, wchg_l = [], [], [], []
+        for tn2 in sorted(mi["tests"].keys()):
+            d = diag.get(pn, {}).get(mn, {}).get(tn2)
+            lf_res = lf.get(pn, {}).get(mn, {}).get(tn2)
+            mlf = _model_metrics_vs_lf(d, lf_res)
+            if mlf:
+                if not np.isnan(mlf["sens_lf"]): sens_l.append(mlf["sens_lf"])
+                if not np.isnan(mlf["spec_lf"]): spec_l.append(mlf["spec_lf"])
+                if not np.isnan(mlf["f1_lf"]):   f1_l.append(mlf["f1_lf"])
+            if d:
+                hu_pos_tiab = d["tp"] + d["fn"]
+                ai_pos_tiab = d["tp"] + d["fp"]
+                if hu_pos_tiab > 0:
+                    # Fewer articles → less full-text reading; positive = reduction
+                    wchg_l.append((hu_pos_tiab - ai_pos_tiab) / hu_pos_tiab)
+
+        t3_rows.append(("model", cat, [
+            model_name, proj_name,
+            fmt_pct(np.mean(sens_l)) if sens_l else "-",
+            fmt_pct(np.mean(spec_l)) if spec_l else "-",
+            fmt(np.mean(f1_l), 3)    if f1_l    else "-",
+            fmt_pct(np.mean(wchg_l)) if wchg_l  else "-",
+        ]))
+
+        # After the last model of a project, add the human baseline row
+        # (we detect the boundary by looking ahead)
+        last_pn = pn
+
+    # Re-iterate to append human baselines after each project block
+    # (simplest approach: rebuild rows with human insertions)
+    rebuilt = []
+    seen_pn = set()
+    project_last_idx = {}  # pn → index of last model row for that project
+    for idx, (kind, cat, row_data) in enumerate(t3_rows):
+        project_last_idx.setdefault(row_data[1], idx)
+        project_last_idx[row_data[1]] = idx
+    for idx, (kind, cat, row_data) in enumerate(t3_rows):
+        rebuilt.append((kind, cat, row_data))
+        pn_display = row_data[1]
+        if idx == project_last_idx[pn_display]:
+            # Find the pn_norm for this display name
+            pn_norm = None
+            for k in projects:
+                if projects[k]["name"] == pn_display:
+                    pn_norm = k; break
+            hlf = _human_metrics_vs_lf(hu_lf, pn_norm) if pn_norm else None
+            if hlf:
+                rebuilt.append(("human", cat, [
+                    "Human TIAB (baseline)", pn_display,
+                    fmt_pct(hlf["sens_lf"]),
+                    fmt_pct(hlf["spec_lf"]),
+                    fmt(hlf["f1_lf"], 3),
+                    "0.0%",   # baseline: humans define the reference workload
+                ]))
+
+    tbl = doc.add_table(rows=1 + len(rebuilt), cols=len(t3_headers))
+    tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    add_borders(tbl)
+    header_row(tbl, t3_headers)
+    for i, (kind, cat, row_data) in enumerate(rebuilt):
+        for j, val in enumerate(row_data):
+            align = WD_ALIGN_PARAGRAPH.LEFT if j <= 1 else WD_ALIGN_PARAGRAPH.CENTER
+            set_cell(tbl.cell(i + 1, j), val, font_size=Pt(8), align=align)
+        if kind == "human":
+            for j in range(len(row_data)):
+                shade(tbl.cell(i + 1, j), _HUMAN_SHADE)
+        elif _CAT_SHADE.get(cat):
+            for j in range(len(row_data)):
+                shade(tbl.cell(i + 1, j), _CAT_SHADE[cat])
+
+    doc.add_paragraph()
+    add_note(doc, "Sens/Spec/F1 vs Listfinal (final included articles as gold standard). "
+             "Workload Change (FT) = full-text reading effort relative to the human "
+             "(positive = fewer articles to read at full-text, negative = more). "
+             "Yellow rows: human TIAB baseline for each project. "
+             "Grey rows: not part of the primary comparison.")
+
+    # ------------------------------------------------------------------
+    #  Figure references
+    # ------------------------------------------------------------------
+    add_heading(doc, "Figure references", level=2)
+    p = doc.add_paragraph()
+    run = p.add_run(
+        "Figure 2 — Sensitivity vs Specificity (vs Listfinal), averaged across "
+        "the 3 official projects — see `paper_fig2_sens_spec_lf.png` in the "
+        "figures folder (built from the `paper_sens_spec_lf` sheet in the "
+        "chart-data XLSX).\n"
+        "Figure 3 — F1 (vs Listfinal) vs Cost, averaged across the 3 official "
+        "projects — see `paper_fig3_f1_vs_cost.png` (built from the "
+        "`paper_f1_vs_cost_official` sheet)."
+    )
+    run.font.size = Pt(9)
+
+    doc.add_paragraph()
 
     return doc
 
