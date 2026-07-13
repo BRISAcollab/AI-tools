@@ -64,7 +64,7 @@ def generate_report(projects, metadados, all_results, output_dir: Path,
     paths.append(general_path)
 
     # One report per project
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         safe = _safe_filename(proj["name"])
         proj_path = output_dir / f"relatorio_projeto_{safe}_{ts_file}.docx"
@@ -134,6 +134,12 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
         table_counter[0] += 1
         return table_counter[0]
 
+    # Project ordering: category first (pilot → official → sensitivity),
+    # then alphabetical inside each category. Uses the UI-supplied
+    # classification when present, otherwise the fallback lists in constants.
+    # Applied through `sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes))`
+    # in every project loop below.
+
     # Display name → project_norm key
     name_to_pn = {projects[pn]["name"]: pn for pn in projects}
 
@@ -159,7 +165,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     run.font.size = Pt(9)
     run.font.color.rgb = RGBColor(100, 100, 100)
 
-    proj_names = [projects[pn]["name"] for pn in sorted(projects.keys())]
+    proj_names = [projects[pn]["name"] for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes))]
     info = doc.add_paragraph()
     info.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = info.add_run(f"Projects analyzed: {', '.join(proj_names)}")
@@ -281,7 +287,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     add_heading(doc, f"Table {tn}. Detected Files Inventory", level=2)
 
     inventory_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         n_models = len(proj["models"])
         n_ai_files = sum(len(m["tests"]) for m in proj["models"].values())
@@ -379,6 +385,20 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
             tokens_in_total=("tokens_input", "sum"),
             tokens_out_total=("tokens_output", "sum"),
         ).reset_index()
+        # Sort by category (pilot → official → sensitivity) instead of alphabetical.
+        # `project` here is the display name from metadata.xlsx; map back to project_norm
+        # for the sort key.
+        _name2pn = {projects[pn]["name"]: pn for pn in projects}
+        cost_summary["_pn"] = cost_summary["project"].apply(
+            lambda n: _name2pn.get(str(n).strip(), str(n).strip().lower())
+        )
+        _CAT_ORDER = {"pilot": 0, "official": 1, "sensitivity": 2}
+        cost_summary["_cat_ord"] = cost_summary["_pn"].apply(
+            lambda p: _CAT_ORDER.get(project_category(p, overrides=project_classes), 1)
+        )
+        cost_summary = (cost_summary.sort_values(["_cat_ord", "_pn"])
+                                    .drop(columns=["_pn", "_cat_ord"])
+                                    .reset_index(drop=True))
 
         cost_headers = ["Project", "Executions", "Total Cost ($)", "Avg Cost ($)",
                         "Tokens In (total)", "Tokens Out (total)"]
@@ -446,7 +466,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
         lf_headers = ["Project", "Model", "Test", "Listfinal N", "Found",
                        "Captured", "Missed", "Capture Rate", "Miss Rate"]
         lf_rows = []
-        for pn in sorted(lf.keys()):
+        for pn in sorted(lf.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             for mn in sorted(lf[pn].keys()):
                 model_name = proj["models"][mn]["name"]
@@ -503,7 +523,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
 
         fn_headers = ["Project", "Model", "Test", "Total Paired", "False Neg.", "% of Total"]
         fn_rows = []
-        for pn in sorted(fn_results.keys()):
+        for pn in sorted(fn_results.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             for mn in sorted(fn_results[pn].keys()):
                 model_name = proj["models"][mn]["name"]
@@ -553,7 +573,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
         fp_headers = ["Project", "Model", "Test", "Total Paired", "False Pos.", "% of Total",
                       "Human Excl. Articles", "FP Rate (of excl.)"]
         fp_rows = []
-        for pn in sorted(fp_results.keys()):
+        for pn in sorted(fp_results.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             for mn in sorted(fp_results[pn].keys()):
                 model_name = proj["models"][mn]["name"]
@@ -609,7 +629,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     add_heading(doc, f"Table {tn_num}. Trio A — Averaged across tests (principal view)", level=3)
     a_avg_headers = ["Project", "Model", "Sens. (TIAB)", "Spec. (TIAB)", "F1 (TIAB)", "Inclusion Rate"]
     a_avg_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         for mn in sorted(proj["models"].keys()):
             mi = proj["models"][mn]
@@ -641,7 +661,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
             set_cell(tbl.cell(i + 1, j), val, font_size=Pt(8), align=align)
 
     hu_inc_lines = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         h = hu_lf.get(pn)
         if h and h.get("n_universe"):
             rate = h["n_human_pos"] / h["n_universe"]
@@ -663,7 +683,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     a_pt_headers = ["Project", "Model", "Test", "Sens. (TIAB)", "Spec. (TIAB)",
                      "F1 (TIAB)", "Inclusion Rate"]
     a_pt_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         for mn in sorted(proj["models"].keys()):
             mi = proj["models"][mn]
@@ -705,7 +725,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     add_heading(doc, f"Table {tn_num}. Trios B & C — Averaged across tests (principal view)", level=3)
     b_avg_headers = ["Project", "Entity", "Sens. (vs LF)", "Spec. (vs LF)", "F1 (vs LF)"]
     b_avg_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         for mn in sorted(proj["models"].keys()):
             mi = proj["models"][mn]
@@ -749,7 +769,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     add_heading(doc, f"Table {tn_num}. Trios B & C — Per test (secondary view)", level=3)
     b_pt_headers = ["Project", "Entity", "Test", "Sens. (vs LF)", "Spec. (vs LF)", "F1 (vs LF)"]
     b_pt_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         for mn in sorted(proj["models"].keys()):
             mi = proj["models"][mn]
@@ -799,7 +819,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
                   "Sens (TIAB)", "Spec (TIAB)", "F1 (TIAB)",
                   "Sens (LF)", "Spec (LF)", "F1 (LF)"]
     c_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         for mn in sorted(proj["models"].keys()):
             mi = proj["models"][mn]
@@ -858,7 +878,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
     add_heading(doc, f"Table {tn_num}. Test-Retest Kappa and Cost", level=3)
     aux_headers = ["Project", "Model", "Kappa (T-R)", "Cost ($, total)"]
     aux_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         for mn in sorted(proj["models"].keys()):
             mi = proj["models"][mn]
@@ -895,7 +915,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
                       "LF total", "LF not in TIAB",
                       "FT total", "FT not in TIAB"]
     audit_rows = []
-    for pn in sorted(projects.keys()):
+    for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
         proj = projects[pn]
         n_paired = "-"
         pd_diag = diag.get(pn) or {}
@@ -969,7 +989,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
                             "Avg F1 (LF)", "Avg Cost ($)", "Cost per Sens. point"]
         cost_eff_rows = []
 
-        for pn in sorted(diag.keys()):
+        for pn in sorted(diag.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             for mn in sorted(diag[pn].keys()):
                 model_name = proj["models"][mn]["name"]
@@ -1111,6 +1131,14 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
             max_ia_hours=("_h_ia", "max"),
             n_runs=("_h_ia", "count"),
         ).reset_index()
+        # Sort by category (pilot → official → sensitivity) instead of alphabetical.
+        _CAT_ORDER = {"pilot": 0, "official": 1, "sensitivity": 2}
+        wr_proj["_cat_ord"] = wr_proj["_proj_key"].apply(
+            lambda p: _CAT_ORDER.get(project_category(p, overrides=project_classes), 1)
+        )
+        wr_proj = (wr_proj.sort_values(["_cat_ord", "_proj_key"])
+                          .drop(columns="_cat_ord")
+                          .reset_index(drop=True))
 
         wp_headers = ["Project", "Total Articles", "Human Time", "Avg AI Time", "Fastest AI",
                       "Avg Reduction (%)", "Avg Speed Factor"]
@@ -1169,7 +1197,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
                        "Reduction", "Capture Rate", "Efficiency Score"]
         eff_rows = []
 
-        for pn in sorted(projects.keys()):
+        for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             proj_diag = diag.get(pn, {})
             proj_lf = lf.get(pn, {})
@@ -1261,7 +1289,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
         add_heading(doc, f"Table {tn_num}. Total Full-Text Hours Saved per Model (across projects)", level=2)
 
         model_totals = {}
-        for pn in sorted(projects.keys()):
+        for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             for mn in sorted(proj["models"].keys()):
                 model_name = proj["models"][mn]["name"]
@@ -1310,7 +1338,7 @@ def _build_general_doc(projects, metadados, all_results, project_classes=None):
         proj_totals_headers = ["Project", "Best Model", "Best Hours Saved",
                                 "Avg Hours Saved across Models"]
         proj_rows = []
-        for pn in sorted(projects.keys()):
+        for pn in sorted(projects.keys(), key=lambda _p: project_sort_key(_p, overrides=project_classes)):
             proj = projects[pn]
             model_hours = {}
             for mn in sorted(proj["models"].keys()):
